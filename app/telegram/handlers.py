@@ -50,7 +50,7 @@ class TelegramHandlers:
             if is_group(m.chat.type):
                 self.bot.reply_to(m, "i'm here 😭")
             else:
-                self.bot.send_message(m.chat.id, "KYOOS is online. send me anything")
+                self.bot.send_message(m.chat.id, "lmyrfawya is online. send me anything")
 
         @self.bot.message_handler(commands=["settings"])
         def settings_cmd(m):
