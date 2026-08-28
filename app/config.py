@@ -43,7 +43,7 @@ class PersonalityDefaults:
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "").strip()
+    groq_api_key: str = os.getenv("GROQ_API_KEY", "").strip()
     # Optional external DB. Empty means local SQLite on the Render instance.
     database_url: str = os.getenv("DATABASE_URL", "").strip()
     redis_url: str = os.getenv("REDIS_URL", "").strip()
@@ -53,8 +53,7 @@ class Settings:
         or os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
     )
     webhook_secret: str = os.getenv("WEBHOOK_SECRET", "").strip()
-    text_model: str = os.getenv("GEMINI_TEXT_MODEL", "gemini-3.7-flash").strip()
-    image_model: str = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image").strip()
+    groq_text_model: str = os.getenv("GROQ_TEXT_MODEL", "openai/gpt-oss-120b").strip()
     memory_size: int = env_int("CHAT_MEMORY_SIZE", 40, 10)
     memory_ttl_seconds: int = env_int("CHAT_MEMORY_TTL_SECONDS", 7200, 60)
     image_pool_ttl_seconds: int = env_int("IMAGE_POOL_TTL_SECONDS", 21600, 300)

@@ -29,25 +29,27 @@ class TelegramHandlers:
             else:self.bot.send_message(m.chat.id,"drop me in a group, then /start there")
         @self.bot.message_handler(commands=["testai"])
         def testai(m):
-            if not can_use_testai(self.bot, m):return
-            lines=["KYOOS AI TEST",f"Gemini {'✅' if self.rt.ai.enabled else '❌'}"]
-            try:
-                if self.rt.ai.enabled:
-                    t=self.rt.ai.generate_text("Reply with exactly: ping")
-                    lines.append(f"Text {'✅' if t else '❌'}")
-                    d=self.rt.ai.generate_structured("Return should_act=false, action=IGNORE, confidence=0.1, target_message_id=null, language=en, dialect=null, intensity=low.",{})
-                    DecisionPayload.validate(d,set()); lines.append("Structured JSON ✅")
-                else: lines += ["Text ❌","Structured JSON ❌"]
-            except Exception: lines += ["Text/structured ❌"]
-            if self.rt.ai.enabled:
+            if not can_use_testai(self.bot, m):
+                return
+            # The Telegram command reply itself is always static/local.
+            # Only the diagnostic checks make optional external API calls.
+            lines=["KYOOS AI TEST", f"Provider: Groq {'✅' if self.rt.ai.enabled else '❌'}"]
+            if not self.rt.ai.enabled:
+                lines += ["Text: ❌ GROQ_API_KEY missing/invalid provider init", "Structured JSON: ❌", "Vision: ❌ (not enabled in Groq build)", "Image generation: ❌ (not enabled in Groq build)"]
+            else:
                 try:
-                    from PIL import Image
-                    from io import BytesIO
-                    b=BytesIO(); Image.new("RGB",(2,2),(0,0,0)).save(b,"JPEG"); _=self.rt.ai.analyze_image(b.getvalue(),"Describe this tiny test image in one word."); lines.append("Vision ✅")
-                except Exception:
-                    lines.append("Vision ❌")
-            else: lines.append("Vision ❌")
-            lines.append("Image generation ✅/quota-dependent")
+                    t=self.rt.ai.generate_text("Reply with exactly: ping")
+                    lines.append(f"Text API: {'✅' if t == 'ping' or t else '❌'}")
+                except Exception as e:
+                    log.exception("/testai text check failed")
+                    lines.append(f"Text API: ❌ {type(e).__name__}")
+                try:
+                    d=self.rt.ai.generate_structured("Return should_act=false, action=IGNORE, confidence=0.1, target_message_id=null, language=en, dialect=null, intensity=low.",{})
+                    DecisionPayload.validate(d,set()); lines.append("Structured JSON: ✅")
+                except Exception as e:
+                    log.exception("/testai structured check failed")
+                    lines.append(f"Structured JSON: ❌ {type(e).__name__}")
+                lines += ["Vision: ❌ not enabled in Groq build", "Image generation: ❌ not enabled in Groq build"]
             self.bot.send_message(m.chat.id,"\n".join(lines))
         @self.bot.callback_query_handler(func=lambda c: c.data.startswith("panel:") or c.data.startswith("set:") or c.data.startswith("language:"))
         def callbacks(c):

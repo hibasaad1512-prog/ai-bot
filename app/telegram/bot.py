@@ -5,6 +5,7 @@ from app.config import settings
 from app.runtime import Runtime
 from app.telegram.handlers import TelegramHandlers
 from app.worker.scheduler import ProactiveScheduler
+from app.telegram.commands import install_commands
 import random
 
 log=logging.getLogger(__name__)
@@ -19,15 +20,18 @@ class KyoosBot:
         except Exception:
             self._bot_username=""
         self.handlers._bot_username=self._bot_username
+        install_commands(self.bot)
         self.register_auto_handler(); self._configure_webhook(); self._start_proactive()
     def _configure_webhook(self):
         if not settings.public_base_url:
+            log.warning("Telegram webhook NOT configured: PUBLIC_BASE_URL/RENDER_EXTERNAL_URL is missing")
             return
         try:
             url=f"{settings.public_base_url}/telegram/webhook"
             self.bot.remove_webhook()
             self.bot.set_webhook(url=url, secret_token=settings.webhook_secret or None)
-            log.info("telegram webhook configured")
+            info=self.bot.get_webhook_info()
+            log.info("telegram webhook configured: url=%s pending=%s last_error=%s", info.url, info.pending_update_count, info.last_error_message or "none")
         except Exception:
             log.exception("webhook setup failed; continuing without crash")
 

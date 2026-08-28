@@ -5,7 +5,7 @@ from app.config import settings
 from app.database import Database
 from app.memory.context import ContextStore
 from app.images.pool import ImagePool
-from app.ai.gemini import GeminiProvider
+from app.ai.groq import GroqProvider
 from app.chaos.engine import ChaosEngine
 from app.chaos.personality import Personality
 from app.games.engine import GameEngine
@@ -19,7 +19,7 @@ class Runtime:
         self.db=Database(settings.database_url)
         self.memory=ContextStore(settings.memory_size,settings.memory_ttl_seconds)
         self.images=ImagePool(settings.image_pool_ttl_seconds)
-        self.ai=GeminiProvider()
+        self.ai=GroqProvider()
         self.chaos=ChaosEngine()
         self.games=GameEngine(Points(self.db))
         self.moderation=ModerationDetector(ModerationPolicy(settings.enabled_moderation))

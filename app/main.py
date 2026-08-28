@@ -19,7 +19,7 @@ def bot_instance():
 @app.get("/")
 @app.get("/health")
 def health():
-    return {"status":"ok","service":"KYOOS CHAOS AI","gemini":bool(settings.gemini_api_key)}
+    return {"status":"ok","service":"KYOOS CHAOS AI","groq":bool(settings.groq_api_key)}
 
 @app.post("/telegram/webhook")
 def telegram_webhook():
@@ -33,7 +33,7 @@ def telegram_webhook():
 
 @app.get("/debug")
 def debug():
-    return {"ok":True,"gemini":bot_instance().runtime.ai.enabled}
+    return {"ok":True,"groq":bot_instance().runtime.ai.enabled}
 
 @app.cli.command("set-webhook")
 def set_webhook():

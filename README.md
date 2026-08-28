@@ -4,7 +4,7 @@ Kyoos is a Telegram group bot designed to feel like a quiet, social, slightly ch
 
 ## Core behavior
 
-Kyoos does **not** reply to every message. A local intervention score runs first; Gemini is only called when an intervention is plausible. The model can return a structured decision, but the application validates the action, target message, cooldowns, permissions and limits before executing anything.
+Kyoos does **not** reply to every message. A local intervention score runs first; Groq is only called when an intervention is plausible. The model can return a structured decision, but the application validates the action, target message, cooldowns, permissions and limits before executing anything.
 
 The action system is modular and includes `IGNORE`, contextual replies, conversation joins, reactions, old-message callbacks, quote remixes, random member interaction, random images, image captions, local image mashups/collages, context memes, image generation, polls, chaos events, mini challenges and companion-bot routing hooks.
 
@@ -18,7 +18,7 @@ Telegram webhook
       |                                  |
       |                            likely ignore?
       |                                  |
-      +---------------------------- no -> Gemini Decision
+      +---------------------------- no -> Groq Decision
                                              |
                                    schema/action validation
                                              |
@@ -29,7 +29,7 @@ Telegram webhook
                                Telegram / Pillow / Games
 ```
 
-AI is provider-agnostic through `AIProvider`; Gemini is the first implementation.
+AI is provider-agnostic through `AIProvider`; Groq is the active implementation.
 
 
 ### Per-group admin permissions
@@ -44,7 +44,7 @@ Copy `.env.example` to `.env` locally. Never commit `.env`.
 Required:
 
 - `TELEGRAM_BOT_TOKEN`
-- `GEMINI_API_KEY`
+- `GROQ_API_KEY`
 
 Production persistence:
 
@@ -59,8 +59,7 @@ Render/webhook:
 
 Optional model settings:
 
-- `GEMINI_TEXT_MODEL` (default `gemini-3.7-flash`)
-- `GEMINI_IMAGE_MODEL` (default `gemini-3.1-flash-image`)
+- `GROQ_TEXT_MODEL` (default `openai/gpt-oss-120b`)
 - `COMPANION_BOT_TOKENS`
 
 ## Local setup
@@ -118,7 +117,7 @@ Personality values are stored per chat:
 
 ## AI behavior
 
-Gemini structured decisions are treated as untrusted input. The application validates:
+Groq structured decisions are treated as untrusted input. The application validates:
 
 - action enum
 - confidence range
@@ -127,9 +126,9 @@ Gemini structured decisions are treated as untrusted input. The application vali
 - cooldown state
 - hourly/burst limits
 
-Gemini cannot call Telegram APIs directly.
+Groq cannot call Telegram APIs directly.
 
-The Gemini Python SDK supports structured/content generation and image generation. The included image provider uses `gemini-3.1-flash-image` by default for image actions. Availability and quota depend on the configured Gemini account/project, so image-generation failure falls back instead of crashing the bot. citeturn992296search2turn992296search3turn992296search4
+Groq is used for text and structured decision generation. The current Groq provider build does not expose image generation or vision, so those capabilities stay disabled rather than failing silently. citeturn992296search2turn992296search3turn992296search4
 
 ## Memory and privacy
 
@@ -139,7 +138,7 @@ Persistent database state is limited to chat settings, game points and chat stat
 
 ## Moderation
 
-Moderation is separate from personality. The included baseline detector handles basic duplicate spam, link-spam patterns and oversized messages. It does not give Gemini moderation authority. Telegram enforcement remains subject to bot permissions.
+Moderation is separate from personality. The included baseline detector handles basic duplicate spam, link-spam patterns and oversized messages. It does not give Groq moderation authority. Telegram enforcement remains subject to bot permissions.
 
 ## Games
 
@@ -153,7 +152,7 @@ The game engine uses virtual points only. There is no real-money gambling. Suppo
 - collage
 - meme captioning
 
-Gemini is reserved for semantic captioning/vision or actual generation when needed.
+Groq is reserved for semantic captioning/vision or actual generation when needed.
 
 ## Testing
 
@@ -168,11 +167,11 @@ The test suite covers chaos scoring, selector behavior, cooldowns, dialect detec
 
 ## Troubleshooting
 
-### Gemini disabled
-Check `GEMINI_API_KEY`, provider availability and the configured model names. Kyoos will keep running without Gemini; it will simply avoid AI-driven interventions or use local fallbacks.
+### Groq disabled
+Check `GROQ_API_KEY`, provider availability and the configured model names. Kyoos will keep running without Groq; it will simply avoid AI-driven interventions or use local fallbacks.
 
 ### No proactive behavior
-Proactivity is intentionally opportunistic. It only runs while the web process is awake and only for recently observed chats. It also requires a quiet period, cooldown availability and a configured Gemini provider.
+Proactivity is intentionally opportunistic. It only runs while the web process is awake and only for recently observed chats. It also requires a quiet period, cooldown availability and a configured Groq provider.
 
 ### No group messages arrive
 Check Telegram Privacy Mode, bot membership and permissions. A bot cannot react to messages Telegram does not deliver to it.
@@ -184,20 +183,20 @@ Check `DATABASE_URL` and credentials. Local SQLite is intentionally a simple fre
 
 Kyoos itself is deployable as a Render Web Service, but some capabilities inherently depend on external services:
 
-- Gemini text/vision/image generation requires a working Gemini API configuration and whatever quota/billing/availability applies to that account.
+- Groq text/vision/image generation requires a working Groq API configuration and whatever quota/billing/availability applies to that account.
 - PostgreSQL persistence is recommended for production; use a persistent database service.
 - Redis is optional but recommended for multi-instance or stronger shared ephemeral state.
 - Telegram group moderation depends on the bot having the required Telegram admin permissions.
 - Companion bots require separately configured bot tokens and must comply with Telegram's platform limits/rules.
 
-The core bot remains functional when Gemini image generation is unavailable.
+The core bot remains functional when Groq image generation is unavailable.
 
 ## Smart Social Behavior
-Kyoos uses a local social-signal layer before Gemini: activity level, direct address, reply-to-bot, questions, humor/laughter cues, serious-context cues, repetition, continuity, old-message callback opportunities, and recent bot behavior. Weak messages can stop before an AI call, while directly addressed messages receive a higher response priority. Humanization remains probabilistic so replies do not all look identical.
+Kyoos uses a local social-signal layer before Groq: activity level, direct address, reply-to-bot, questions, humor/laughter cues, serious-context cues, repetition, continuity, old-message callback opportunities, and recent bot behavior. Weak messages can stop before an AI call, while directly addressed messages receive a higher response priority. Humanization remains probabilistic so replies do not all look identical.
 
 ### Smart behavior environment variables
-- `AI_MIN_SCORE`: local score required before spending a Gemini decision call (default `34`).
+- `AI_MIN_SCORE`: local score required before spending a Groq decision call (default `34`).
 - `CALLBACK_MIN_AGE_SECONDS`: minimum age for considering older messages as callback material (default `300`).
 - `PROACTIVE_QUIET_SECONDS`: minimum quiet period before proactive behavior is considered (default `600`).
 
-These can stay at their defaults on Render. Lowering `AI_MIN_SCORE` makes Kyoos more talkative and increases Gemini usage; increasing it makes Kyoos quieter and cheaper.
+These can stay at their defaults on Render. Lowering `AI_MIN_SCORE` makes Kyoos more talkative and increases Groq usage; increasing it makes Kyoos quieter and cheaper.
