@@ -48,8 +48,8 @@ Required:
 
 Production persistence:
 
-- `DATABASE_URL` — PostgreSQL strongly recommended for Render.
-- `REDIS_URL` — optional cache/state provider. The current app has bounded in-memory state as a fallback, but Redis is preferable when available.
+- `DATABASE_URL` — optional. Leave empty for local SQLite on the Render instance; use PostgreSQL later when persistent storage is needed.
+- `REDIS_URL` — optional. KYOOS does not require Redis to run.
 
 Render/webhook:
 
@@ -85,8 +85,8 @@ Recommended production setup:
 2. Create a Render Web Service from that repository.
 3. Use the included `render.yaml`.
 4. Add the environment variables from `.env.example`.
-5. Set `DATABASE_URL` to a persistent PostgreSQL database.
-6. Set `PUBLIC_BASE_URL` to the deployed HTTPS origin.
+5. Leave `DATABASE_URL` and `REDIS_URL` empty for the simple free setup.
+6. `PUBLIC_BASE_URL` can also be left empty on Render because the app auto-uses `RENDER_EXTERNAL_URL`.
 7. Add the Kyoos bot to the target groups with the required Telegram permissions.
 
 The application configures the Telegram webhook automatically when `PUBLIC_BASE_URL` is present. It also continues to boot if webhook registration temporarily fails.
@@ -101,7 +101,7 @@ For moderation features, grant only the group permissions you actually enable. D
 
 Regular members mainly use `/start`. Kyoos then observes and acts automatically.
 
-Admins can use `/settings` only inside groups/supergroups where Telegram confirms they are administrators. Every inline settings button and language change is re-checked against the current group admin status. `/testai` is admin-gated and works in private chats for globally configured admins, or in groups for confirmed group admins.
+Admins can use `/settings` only inside groups/supergroups where Telegram confirms they are administrators. Every inline settings button and language change is re-checked against the current group admin status. `/testai` is available in private chats without a global admin ID, and is restricted to confirmed group admins inside groups.
 
 Personality values are stored per chat:
 
@@ -178,7 +178,7 @@ Proactivity is intentionally opportunistic. It only runs while the web process i
 Check Telegram Privacy Mode, bot membership and permissions. A bot cannot react to messages Telegram does not deliver to it.
 
 ### Database errors
-Check `DATABASE_URL` and credentials. For Render, do not rely on local SQLite for permanent state.
+Check `DATABASE_URL` and credentials. Local SQLite is intentionally a simple free-mode fallback; its state is not guaranteed across Render redeploys/restarts. Use PostgreSQL later if permanent persistence is required.
 
 ## Production limitations / paid or external services
 

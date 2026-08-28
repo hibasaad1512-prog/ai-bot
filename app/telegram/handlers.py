@@ -8,7 +8,7 @@ from app.ai.prompts import decision_prompt,response_prompt
 from app.ai.humanizer import humanize
 from app.ai.schemas import DecisionPayload
 from app.chaos.actions import Action, DEFAULT_ACTIONS
-from app.telegram.permissions import is_global_admin, is_group, can_use_settings, can_use_testai, can_use_settings_callback
+from app.telegram.permissions import is_group, can_use_settings, can_use_testai, can_use_settings_callback
 from app.telegram.admin_panel import panel, adjust_panel, language_panel
 from app.images.pool import ImageRef
 from app.images.collage import side_by_side, collage

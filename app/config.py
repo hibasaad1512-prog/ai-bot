@@ -14,15 +14,6 @@ def env_int(name: str, default: int, minimum: int = 0) -> int:
         return default
 
 
-def env_float(name: str, default: float, minimum: float = 0.0, maximum: float | None = None) -> float:
-    try:
-        value = float(os.getenv(name, str(default)))
-    except ValueError:
-        value = default
-    value = max(minimum, value)
-    return min(value, maximum) if maximum is not None else value
-
-
 def env_ids(name: str) -> frozenset[int]:
     out: set[int] = set()
     for raw in os.getenv(name, "").split(","):
@@ -53,11 +44,15 @@ class PersonalityDefaults:
 class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "").strip()
+    # Optional external DB. Empty means local SQLite on the Render instance.
     database_url: str = os.getenv("DATABASE_URL", "").strip()
     redis_url: str = os.getenv("REDIS_URL", "").strip()
-    public_base_url: str = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    # Prefer explicit URL, otherwise Render's automatically injected service URL.
+    public_base_url: str = (
+        os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+        or os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+    )
     webhook_secret: str = os.getenv("WEBHOOK_SECRET", "").strip()
-    admin_user_ids: frozenset[int] = field(default_factory=lambda: env_ids("ADMIN_USER_IDS"))
     text_model: str = os.getenv("GEMINI_TEXT_MODEL", "gemini-3.7-flash").strip()
     image_model: str = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image").strip()
     memory_size: int = env_int("CHAT_MEMORY_SIZE", 40, 10)

@@ -1,11 +1,4 @@
 from __future__ import annotations
-from app.config import settings
-
-
-def is_global_admin(user_id: int) -> bool:
-    return user_id in settings.admin_user_ids
-
-
 def is_group(chat_type: str) -> bool:
     return chat_type in {"group", "supergroup"}
 
@@ -27,8 +20,10 @@ def can_use_settings(bot, message) -> bool:
 
 
 def can_use_testai(bot, message) -> bool:
-    """testai works in private and groups, but remains admin-gated."""
-    if is_global_admin(message.from_user.id):
+    """testai is safe to expose in private chats; in groups it is admin-only."""
+    if not message.from_user:
+        return False
+    if message.chat.type == "private":
         return True
     return is_group(message.chat.type) and is_group_admin(bot, message.chat.id, message.from_user.id)
 
