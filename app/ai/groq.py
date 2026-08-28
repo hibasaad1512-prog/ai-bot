@@ -10,11 +10,9 @@ log = logging.getLogger(__name__)
 
 
 class GroqProvider(AIProvider):
-    """Groq text/structured-output provider.
-
-    Groq is used for all text + decision generation. Image generation/vision
-    are intentionally reported as unsupported by this provider rather than
-    pretending they work.
+    """Groq text provider. Runtime KYOOS replies use the text endpoint directly;
+    structured output remains available for compatibility with the legacy chaos modules.
+    Image generation/vision are intentionally unsupported in this build.
     """
 
     def __init__(self):
@@ -22,7 +20,7 @@ class GroqProvider(AIProvider):
         if settings.groq_api_key:
             try:
                 from groq import Groq
-                self.client = Groq(api_key=settings.groq_api_key)
+                self.client = Groq(api_key=settings.groq_api_key, timeout=30.0, max_retries=1)
             except Exception:
                 log.exception("Groq init failed")
 
@@ -45,8 +43,11 @@ class GroqProvider(AIProvider):
             "model": settings.groq_text_model,
             "messages": self._messages(prompt, system),
             "temperature": 0.8,
-            "max_tokens": 1200,
+            "max_tokens": 400,
+            "reasoning_effort": "low" if settings.groq_text_model.startswith("openai/gpt-oss-") else None,
         }
+        if kwargs.get("reasoning_effort") is None:
+            kwargs.pop("reasoning_effort", None)
         if response_format is not None:
             kwargs["response_format"] = response_format
         return self.client.chat.completions.create(**kwargs)

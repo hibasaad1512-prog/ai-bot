@@ -25,7 +25,7 @@ services:
       - key: ENABLED_GAMES
         value: "true"
       - key: ENABLED_PROACTIVE
-        value: "true"
+        value: "false"
       - key: AI_MIN_SCORE
         value: "34"
       - key: CALLBACK_MIN_AGE_SECONDS

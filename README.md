@@ -1,10 +1,10 @@
 # KYOOS — CHAOS AI
 
-Kyoos is a Telegram group bot designed to feel like a quiet, social, slightly chaotic member instead of a command-driven assistant. It observes recent context, activity, language style and its own cooldowns, then decides whether to stay silent or intervene.
+Kyoos is a Telegram bot designed to feel like a casual, social, slightly chaotic member. `/start`, `/settings` and `/testai` are local commands; every other non-command text message is sent directly to Groq for a reply.
 
 ## Core behavior
 
-Kyoos does **not** reply to every message. A local intervention score runs first; Groq is only called when an intervention is plausible. The model can return a structured decision, but the application validates the action, target message, cooldowns, permissions and limits before executing anything.
+Kyoos replies to every normal text message by default. There is no local AI-eligibility gate on ordinary messages, so a valid user message is never silently discarded just because a score was low. The local command handlers always run first for `/start`, `/settings` and `/testai`.
 
 The action system is modular and includes `IGNORE`, contextual replies, conversation joins, reactions, old-message callbacks, quote remixes, random member interaction, random images, image captions, local image mashups/collages, context memes, image generation, polls, chaos events, mini challenges and companion-bot routing hooks.
 
@@ -171,7 +171,7 @@ The test suite covers chaos scoring, selector behavior, cooldowns, dialect detec
 Check `GROQ_API_KEY`, provider availability and the configured model names. Kyoos will keep running without Groq; it will simply avoid AI-driven interventions or use local fallbacks.
 
 ### No proactive behavior
-Proactivity is intentionally opportunistic. It only runs while the web process is awake and only for recently observed chats. It also requires a quiet period, cooldown availability and a configured Groq provider.
+Proactive messages are disabled by default to save free-plan quota. Normal user messages still go directly to Groq.
 
 ### No group messages arrive
 Check Telegram Privacy Mode, bot membership and permissions. A bot cannot react to messages Telegram does not deliver to it.
