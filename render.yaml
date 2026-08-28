@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: kyoos-chaos-ai
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 1 -k gthread --threads 4 --timeout 120 app.main:app
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: ADMIN_USER_IDS
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CHAT_MEMORY_SIZE
+        value: "40"
+      - key: CHAT_MEMORY_TTL_SECONDS
+        value: "7200"
+      - key: IMAGE_POOL_TTL_SECONDS
+        value: "21600"
+      - key: ENABLED_CHAOS
+        value: "true"
+      - key: ENABLED_MODERATION
+        value: "true"
+      - key: ENABLED_GAMES
+        value: "true"
+      - key: ENABLED_PROACTIVE
+        value: "true"
+      - key: AI_MIN_SCORE
+        value: "34"
+      - key: CALLBACK_MIN_AGE_SECONDS
+        value: "300"
+      - key: PROACTIVE_QUIET_SECONDS
+        value: "600"

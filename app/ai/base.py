@@ -1,0 +1,13 @@
+from __future__ import annotations
+from abc import ABC, abstractmethod
+from typing import Any
+
+class AIProvider(ABC):
+    @abstractmethod
+    def generate_text(self, prompt: str, system: str | None = None) -> str: ...
+    @abstractmethod
+    def generate_structured(self, prompt: str, schema: dict[str, Any], system: str | None = None) -> dict[str, Any]: ...
+    @abstractmethod
+    def analyze_image(self, image_bytes: bytes, prompt: str) -> str: ...
+    @abstractmethod
+    def generate_image(self, prompt: str) -> bytes | None: ...

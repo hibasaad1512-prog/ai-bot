@@ -1,0 +1,10 @@
+Flask>=3.1,<4
+pyTelegramBotAPI>=4.29,<5
+requests>=2.32,<3
+google-genai>=1.50,<2
+Pillow>=11,<13
+SQLAlchemy>=2.0,<3
+psycopg[binary]>=3.2,<4
+redis>=6,<8
+gunicorn>=23,<24
+pytest>=8,<9
