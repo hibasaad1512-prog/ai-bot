@@ -48,8 +48,8 @@ def register(bot,runtime):
   try:
    try:bot.answer_callback_query(c.id)
    except:pass
-   if d in ('mad:open','mad:exit'):
-    save(runtime.db,mad_waiting=False);bot.send_message(c.message.chat.id,'🚪 تم الخروج من المختبر.');return
+   if d=='mad:exit':save(runtime.db,mad_waiting=False);bot.send_message(c.message.chat.id,'🚪 خرجت من المختبر.\nAuto Send مستمر إذا كان مفعّلًا.');return
+   if d=='mad:open':bot.send_message(c.message.chat.id,'🧪 مختبر الميرفاوية',reply_markup=menu());return
    if d=='mad:chats':bot.send_message(c.message.chat.id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db)));return
    if d=='mad:addchat':save(runtime.db,mad_waiting='addchat');bot.send_message(c.message.chat.id,'➕ أرسل Forward من الكروب أو chat ID.');return
    if d.startswith('mad:select:'):save(runtime.db,chaos_target_chat_id=int(d.split(':')[-1]),mad_waiting=False);bot.send_message(c.message.chat.id,'🎯 تم اختيار الكروب.',reply_markup=menu());return
@@ -66,7 +66,7 @@ def register(bot,runtime):
     words=toks(msgs);n=random.randint(3,min(15,len(words))) if words else 0;bot.send_message(t,' '.join(random.sample(words,n)) if n else '3:')
    elif d=='mad:tip':
     from telebot import types
-    amount=random.randint(1,1000);k=types.InlineKeyboardMarkup();k.add(types.InlineKeyboardButton(f'⭐ Tip {amount}',url=f'https://t.me/{TIP_USERNAME}'));bot.send_message(t,'🎁 Tip للميرفاوية',reply_markup=k)
+    amount=random.randint(1,1000);texts=['شي حاجة زوينة من عند الميرفاوية','إلا بغيتي دعم بسيط 🤍','خليها Tip عشوائية اليوم 😺','دعمك كيعني لينا بزاف'];k=types.InlineKeyboardMarkup();k.add(types.InlineKeyboardButton(f'⭐ {amount} Stars',url=f'https://t.me/{TIP_USERNAME}'));bot.send_message(t,random.choice(texts),reply_markup=k)
    elif d=='mad:mood':bot.send_message(t,random.choice(['3:','المود اليوم غريب شوية','صافي خليوها على الله','سلام لاباس؟ صافي مزيان']))
    elif d=='mad:media':
     media=[m for m in msgs if getattr(m,'media_type',None)]
