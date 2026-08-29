@@ -44,35 +44,55 @@ class PersonalityDefaults:
 class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     groq_api_key: str = os.getenv("GROQ_API_KEY", "").strip()
-    # Optional external DB. Empty means local SQLite on the Render instance.
     database_url: str = os.getenv("DATABASE_URL", "").strip()
     redis_url: str = os.getenv("REDIS_URL", "").strip()
-    # Prefer explicit URL, otherwise Render's automatically injected service URL.
+
     public_base_url: str = (
         os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
         or os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
     )
+
     webhook_secret: str = os.getenv("WEBHOOK_SECRET", "").strip()
     groq_text_model: str = os.getenv("GROQ_TEXT_MODEL", "openai/gpt-oss-120b").strip()
+
     memory_size: int = env_int("CHAT_MEMORY_SIZE", 30, 10)
     memory_ttl_seconds: int = env_int("CHAT_MEMORY_TTL_SECONDS", 7200, 60)
     image_pool_ttl_seconds: int = env_int("IMAGE_POOL_TTL_SECONDS", 21600, 300)
+
     min_cooldown_seconds: int = env_int("MIN_COOLDOWN_SECONDS", 20, 1)
     max_cooldown_seconds: int = env_int("MAX_COOLDOWN_SECONDS", 45, 1)
+
+    reply_chance: int = env_int("REPLY_CHANCE", 80, 0)
+    reply_delay_min: float = float(os.getenv("REPLY_DELAY_MIN", "1.5"))
+    reply_delay_max: float = float(os.getenv("REPLY_DELAY_MAX", "4.0"))
+    same_user_limit: int = env_int("SAME_USER_LIMIT", 2, 1)
+    same_user_cooldown: int = env_int("SAME_USER_COOLDOWN", 180, 1)
+
     soft_hourly_limit: int = env_int("SOFT_HOURLY_LIMIT", 20, 1)
     hard_hourly_limit: int = env_int("HARD_HOURLY_LIMIT", 30, 1)
     max_consecutive_bot_messages: int = env_int("MAX_CONSECUTIVE_BOT_MESSAGES", 2, 1)
     max_action_payload_chars: int = env_int("MAX_ACTION_PAYLOAD_CHARS", 1200, 100)
     max_image_mb: int = env_int("MAX_IMAGE_MB", 8, 1)
+
     enabled_chaos: bool = env_bool("ENABLED_CHAOS", True)
     enabled_moderation: bool = env_bool("ENABLED_MODERATION", True)
     enabled_games: bool = env_bool("ENABLED_GAMES", True)
     enabled_proactive: bool = env_bool("ENABLED_PROACTIVE", False)
+
     ai_min_score: int = env_int("AI_MIN_SCORE", 34, 0)
     callback_min_age_seconds: int = env_int("CALLBACK_MIN_AGE_SECONDS", 300, 60)
     proactive_quiet_seconds: int = env_int("PROACTIVE_QUIET_SECONDS", 600, 60)
+
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
-    companion_bot_tokens: tuple[str, ...] = field(default_factory=lambda: tuple(x.strip() for x in os.getenv("COMPANION_BOT_TOKENS", "").split(",") if x.strip()))
+
+    companion_bot_tokens: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            x.strip()
+            for x in os.getenv("COMPANION_BOT_TOKENS", "").split(",")
+            if x.strip()
+        )
+    )
+
     defaults: PersonalityDefaults = field(default_factory=PersonalityDefaults)
 
 
