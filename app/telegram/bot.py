@@ -10,6 +10,7 @@ from app.runtime import Runtime
 from app.telegram.commands import install_commands
 from app.telegram.handlers import TelegramHandlers
 from app.telegram.chaos_admin import register as register_chaos_admin
+from app.telegram.memory_admin import is_owner, menu as god_menu
 from app.memory.handlers import MemoryHandlers
 from app.worker.scheduler import ProactiveScheduler
 
@@ -29,14 +30,36 @@ class KyoosBot:
             num_threads=4,
         )
         self.runtime = Runtime()
+
+        # One visible owner command: /admin. Register it before the legacy
+        # memory handler so it always opens the complete GOD PANEL.
+        @self.bot.message_handler(commands=["admin"])
+        def god_panel(message):
+            if not is_owner(getattr(message.from_user, "id", None)):
+                return
+            if getattr(message.chat, "type", "") != "private":
+                try:
+                    self.bot.send_message(
+                        message.from_user.id,
+                        "🔐 GOD PANEL — private owner control.",
+                        reply_markup=god_menu(),
+                    )
+                    self.bot.reply_to(message, "📩 أرسلت لك الـGOD PANEL على الخاص.")
+                except Exception:
+                    pass
+                return
+            self.bot.send_message(
+                message.chat.id,
+                "🔐 GOD PANEL\n\nكل أدوات الإدارة والتخصيص في مكان واحد.",
+                reply_markup=god_menu(),
+            )
+
         self.handlers = TelegramHandlers(self.bot, self.runtime)
         self.memory_handlers = MemoryHandlers(
             self.bot,
             self.runtime,
             self.handlers,
         )
-        # Private owner-only lab: choose a known group and send controlled random
-        # experiments there using content already seen by the bot.
         register_chaos_admin(self.bot, self.runtime)
 
         try:
