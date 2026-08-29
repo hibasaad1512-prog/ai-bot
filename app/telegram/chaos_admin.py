@@ -69,7 +69,7 @@ def resolve_text(bot, value):
         return bot.get_chat(int('-100' + token))
     if not token.startswith('+'):
         return bot.get_chat('@' + token)
-    return None  # private invite links do not reveal a chat id; use a forwarded message
+    return None
 
 
 def toks(msgs):
@@ -116,6 +116,33 @@ def group_menu(gs):
 
 
 def register(bot, runtime):
+    # Telegram does not provide a "list all chats the bot belongs to" API.
+    # The reliable non-AI solution is to register chat metadata from every
+    # incoming update before normal handlers run. This means a group appears
+    # in the Lab as soon as the bot receives ANY update from it, even when no
+    # AI response was generated and no message was stored yet.
+    if not getattr(bot, '_merva_chat_discovery_wrapped', False):
+        original_process = bot.process_new_updates
+
+        def process_with_discovery(updates):
+            try:
+                for update in updates or []:
+                    msg = (
+                        getattr(update, 'message', None)
+                        or getattr(update, 'edited_message', None)
+                        or getattr(update, 'channel_post', None)
+                        or getattr(update, 'edited_channel_post', None)
+                    )
+                    chat = getattr(msg, 'chat', None)
+                    if chat and getattr(chat, 'type', None) in ('group', 'supergroup'):
+                        remember_chat(runtime.db, chat)
+            except Exception:
+                pass
+            return original_process(updates)
+
+        bot.process_new_updates = process_with_discovery
+        bot._merva_chat_discovery_wrapped = True
+
     @bot.callback_query_handler(func=lambda c: bool(c.data) and c.data.startswith('mad:'))
     def cb(c):
         if getattr(c, 'from_user', None).id != ADMIN_ID or getattr(c.message.chat, 'type', None) != 'private':
