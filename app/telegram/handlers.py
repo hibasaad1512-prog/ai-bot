@@ -133,6 +133,44 @@ class TelegramHandlers:
         # SETTINGS CALLBACKS
         # -----------------------------------------------------
 
+        @self.bot.message_handler(commands=["currentkeyofg"])
+        def current_key_of_g(m):
+            # Private-chat only and owner-only when OWNER_USER_ID is configured.
+            if getattr(m.chat, "type", None) != "private":
+                return
+
+            owner_id = getattr(settings, "owner_user_id", None)
+            if owner_id is not None and m.from_user and m.from_user.id != owner_id:
+                return
+
+            try:
+                index = getattr(self.rt.ai, "current_key_index", None)
+                total = len(getattr(self.rt.ai, "clients", []) or [])
+
+                if index is None:
+                    # Compatibility with older provider versions.
+                    index = getattr(self.rt.ai, "current_index", 0)
+
+                if total:
+                    self.bot.send_message(
+                        m.chat.id,
+                        f"🔑 Active Groq key: #{int(index) + 1}\n📦 Total keys: {total}",
+                    )
+                else:
+                    self.bot.send_message(
+                        m.chat.id,
+                        "❌ No Groq keys are loaded.",
+                    )
+            except Exception:
+                log.exception("/currentkeyofg failed")
+                try:
+                    self.bot.send_message(
+                        m.chat.id,
+                        "❌ Key status unavailable.",
+                    )
+                except Exception:
+                    pass
+
         @self.bot.callback_query_handler(
             func=lambda c:
                 c.data.startswith("panel:")
