@@ -1,4 +1,4 @@
-from __future__ import annotations
+دfrom __future__ import annotations
 
 import logging
 import random
@@ -28,28 +28,26 @@ log = logging.getLogger(__name__)
 
 
 class TelegramHandlers:
-    """Handlers for الميرفاوية / lmyrfawya."""
+    """Telegram handlers for الميرفاوية / lmyrfawya."""
 
     def __init__(self, bot, runtime):
         self.bot = bot
         self.rt = runtime
         self._bot_username = "الميرفاوية"
 
-        # لكل شخص في كل شات:
-        # عدد الردود + وقت انتهاء الـ cooldown
+        # Per-user reply tracking.
+        # {(chat_id, user_id): {"count": int, "reset_at": float}}
         self._user_reply_limits: dict[
             tuple[int, int],
             dict[str, float | int],
         ] = {}
 
-        # الموعد القادم للرسالة العشوائية
+        # Next proactive message time for each chat.
         self._next_proactive: dict[int, float] = {}
 
         self._register()
 
     def _register(self):
-        from telebot import types
-
         @self.bot.message_handler(commands=["start"])
         def start(m):
             if is_group(m.chat.type):
@@ -100,7 +98,7 @@ class TelegramHandlers:
                     )
 
             lines.append(
-                "Runtime: 80% reply chance + delay + random callbacks + spontaneous messages"
+                "Runtime: 80% reply chance + random callbacks + chat remix + proactive messages"
             )
 
             self.bot.send_message(
@@ -292,31 +290,6 @@ class TelegramHandlers:
 
         return random.random() * 100 < chance
 
-    def _random_reply_delay(self) -> float:
-        minimum = float(
-            getattr(
-                settings,
-                "reply_delay_min",
-                1.5,
-            )
-        )
-
-        maximum = float(
-            getattr(
-                settings,
-                "reply_delay_max",
-                4.0,
-            )
-        )
-
-        if maximum < minimum:
-            minimum, maximum = maximum, minimum
-
-        return random.uniform(
-            minimum,
-            maximum,
-        )
-
     def _can_reply_to_user(
         self,
         chat_id: int,
@@ -393,7 +366,7 @@ class TelegramHandlers:
         self._user_reply_limits[key] = state
 
     # =========================================================
-    # Random callback
+    # Random older-message callback
     # =========================================================
 
     def _random_callback_context(
@@ -419,7 +392,6 @@ class TelegramHandlers:
         if not candidates:
             return "", ""
 
-        # أخذ جزء حديث نسبيًا بدل رسالة قديمة جدًا
         candidates = candidates[-25:]
 
         chosen = random.choice(
@@ -431,8 +403,8 @@ class TelegramHandlers:
             f"{chosen.display_name}: "
             f"{chosen.text[:700]}\n"
             "\n"
-            "React naturally to this older message only if "
-            "it actually fits the current conversation.",
+            "React to this older message only if it "
+            "actually fits naturally.",
             chosen.text[:700],
         )
 
@@ -512,11 +484,11 @@ class TelegramHandlers:
             "RANDOM CHAT REMIX MATERIAL:\n"
             + "\n".join(pieces)
             + "\n\n"
-            "You may creatively combine a few of these words "
-            "or phrases into a natural spontaneous message.\n"
-            "Do NOT simply concatenate them.\n"
-            "Do NOT explain that they came from different messages.\n"
-            "Do NOT force this idea if it sounds unnatural."
+            "You may combine some of these words or phrases "
+            "into a natural message.\n"
+            "Do not simply concatenate them.\n"
+            "Do not explain where they came from.\n"
+            "Do not force the remix if it sounds unnatural."
         )
 
     def _build_reply_context(
@@ -542,7 +514,7 @@ class TelegramHandlers:
 
         mode = "DIRECT_REPLY"
 
-        # 15% chance of older-message callback.
+        # 15% random callback.
         if random.random() < 0.15:
             callback_context, _ = (
                 self._random_callback_context(
@@ -555,10 +527,9 @@ class TelegramHandlers:
                 direct_context += (
                     "\n" + callback_context
                 )
-
                 mode = "RANDOM_CALLBACK"
 
-        # 8% chance of word/phrase remix.
+        # 8% random chat remix.
         if random.random() < 0.08:
             remix_context = (
                 self._random_remix_context(
@@ -587,7 +558,7 @@ class TelegramHandlers:
         if not m.from_user:
             return
 
-        # Ignore other bots.
+        # Never answer bots.
         if getattr(
             m.from_user,
             "is_bot",
@@ -637,7 +608,7 @@ class TelegramHandlers:
 
         self.rt.memory.add(cm)
 
-        # Moderation.
+        # Keep moderation independent.
         if text and settings.enabled_moderation:
             try:
                 mod = self.rt.moderation.detect(
@@ -684,21 +655,25 @@ class TelegramHandlers:
 
         user_id = m.from_user.id
 
-        # Maximum replies to same user before cooldown.
+        # -----------------------------------------------------
+        # IMPORTANT:
+        # These checks happen BEFORE Groq, so ignored messages
+        # do not wait for an AI request.
+        # -----------------------------------------------------
+
+        # Same-user limit.
         if not self._can_reply_to_user(
             m.chat.id,
             user_id,
         ):
             return
 
-        # 80% chance.
+        # 80% reply chance.
         if not self._reply_chance_passes():
             return
 
-        # Human-like delay.
-        time.sleep(
-            self._random_reply_delay()
-        )
+        # No artificial delay here.
+        # Response generation starts immediately.
 
         recent = self.rt.memory.recent(
             m.chat.id,
@@ -728,6 +703,8 @@ class TelegramHandlers:
             "cute_but_not_cringe": True,
             "short_spontaneous_reply": True,
             "character_name": "الميرفاوية",
+            "random_callback_possible": True,
+            "chat_remix_possible": True,
         }
 
         try:
@@ -792,7 +769,7 @@ class TelegramHandlers:
                 allow_sending_without_reply=True,
             )
 
-            # Count only actual successful replies.
+            # Count only successful replies.
             self._record_user_reply(
                 m.chat.id,
                 user_id,
@@ -829,11 +806,11 @@ class TelegramHandlers:
         return text[:1000]
 
     # =========================================================
-    # Spontaneous messages
+    # Proactive / spontaneous messages
     # =========================================================
 
     def proactive(self, chat_id: int):
-        """Start a conversation occasionally after a random 6-15 hour interval."""
+        """Send a spontaneous message at a random time between 6 and 15 hours."""
 
         if not self.rt.ai.enabled:
             return
@@ -893,7 +870,7 @@ class TelegramHandlers:
         if now < next_time:
             return
 
-        # Schedule next time immediately.
+        # Schedule another random window.
         minimum = int(
             getattr(
                 settings,
@@ -920,7 +897,7 @@ class TelegramHandlers:
             )
         )
 
-        # Default is 100 so that the 6-15h event actually sends.
+        # Default 100 = send when the scheduled time is reached.
         chance = max(
             0,
             min(
@@ -942,7 +919,7 @@ class TelegramHandlers:
             chat_id
         )
 
-        # Do not interrupt a currently active chat.
+        # Don't interrupt a currently active conversation.
         quiet_seconds = getattr(
             settings,
             "proactive_quiet_seconds",
@@ -997,7 +974,7 @@ class TelegramHandlers:
                 f"{selected.text[:600]}"
             )
 
-        # 15% chance of remixing random pieces.
+        # 15% chance to remix random chat pieces.
         if random.random() < 0.15:
             remix = self._random_remix_context(
                 chat_id
@@ -1044,7 +1021,9 @@ class TelegramHandlers:
                 lang.as_dict(),
             )
 
-            txt = self._clean_reply(txt)
+            txt = self._clean_reply(
+                txt
+            )
 
             if not txt:
                 return
@@ -1058,7 +1037,6 @@ class TelegramHandlers:
                 chat_id
             )
 
-            # Store proactive reply.
             self.rt.memory.add(
                 ChatMessage(
                     chat_id=chat_id,
