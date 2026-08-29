@@ -38,7 +38,15 @@ class TelegramHandlers:
         self._register()
 
     def _is_waiting_for_groq_key(self, m):
-        return bool(getattr(m, "from_user", None) and m.from_user.id in getattr(settings, "groq_admin_ids", frozenset({8734853156})) and m.chat.type == "private" and m.from_user.id in self._groq_waiting_add)
+        return bool(getattr(m, "from_user", None) and m.from_user.id in getattr(settings, "groq_admin_ids", frozenset({8734853156})) and getattr(m.chat, "type", None) == "private" and m.from_user.id in self._groq_waiting_add)
+
+    def on_message(self, message):
+        """Compatibility hook used by persistent-memory integration."""
+        return message
+
+    def _build_ai_context(self, message, current_text):
+        """Minimal stable context hook; memory integration can extend this safely."""
+        return (current_text or "", "default")
 
     def _register(self):
         @self.bot.message_handler(commands=["start"])
@@ -61,14 +69,16 @@ class TelegramHandlers:
         def testai(m):
             if not can_use_testai(self.bot, m): return
             lines = ["LMYRFAWYA AI TEST", f"Provider: Groq {'✅' if self.rt.ai.enabled else '❌'}"]
-            if not self.rt.ai.enabled: lines.append("Text API: ❌ Groq client unavailable")
+            if not self.rt.ai.enabled:
+                lines.append("Text API: ❌ Groq client unavailable")
             else:
                 try:
                     text = self.rt.ai.generate_text("Reply with exactly: ping")
                     lines.append(f"Text API: {'✅' if text.strip() else '❌'}")
                     if text.strip() and text.strip().lower() != "ping": lines.append(f"Reply: {text[:120]}")
                 except Exception as exc:
-                    log.exception("/testai failed"); lines.append(f"Text API: ❌ {type(exc).__name__}: {str(exc)[:160]}")
+                    log.exception("/testai failed")
+                    lines.append(f"Text API: ❌ {type(exc).__name__}: {str(exc)[:160]}")
             lines.append("Runtime: group AI replies only")
             self.bot.send_message(m.chat.id, "\n".join(lines))
 
