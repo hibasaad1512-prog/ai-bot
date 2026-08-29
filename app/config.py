@@ -83,6 +83,12 @@ class Settings:
     # No GROQ_TEXT_MODEL environment variable is required.
     groq_text_model: str = "llama-3.3-70b-versatile"
 
+    # Telegram numeric user IDs allowed to manage Groq keys privately.
+    # Example: GROQ_ADMIN_IDS=123456789,987654321
+    groq_admin_ids: frozenset[int] = field(
+        default_factory=lambda: env_ids("GROQ_ADMIN_IDS")
+    )
+
     # Optional external DB.
     database_url: str = os.getenv(
         "DATABASE_URL",
