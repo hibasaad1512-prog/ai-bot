@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 
 
 class GroqProvider(AIProvider):
-    """Groq text provider. Runtime KYOOS replies use the text endpoint directly;
+    """Groq text provider. Runtime lmyrfawya replies use the text endpoint directly;
     structured output remains available for compatibility with the legacy chaos modules.
     Image generation/vision are intentionally unsupported in this build.
     """
@@ -68,7 +68,7 @@ class GroqProvider(AIProvider):
             {
                 "type": "json_schema",
                 "json_schema": {
-                    "name": "kyoos_decision",
+                    "name": "Lmyrfawya_decision",
                     "strict": True,
                     "schema": structured_schema,
                 },
