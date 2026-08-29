@@ -2,7 +2,7 @@ from __future__ import annotations
 import random, re
 from app.chaos.personality import Personality
 
-EMOJIS = ["😭", "💀", "😂", "👀", "🤨", "nah", "lol"]
+EMOJIS = ["😭", "💀", "😹", "👀", "😺", "nah", "lol"]
 
 
 def humanize(text: str, personality: Personality, style: dict) -> str:
