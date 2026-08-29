@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from typing import Any
 
@@ -64,6 +65,9 @@ class MemoryStore:
         if not value:
             raise ValueError("memory value cannot be empty")
         now = time.time()
+        key = memory_key.strip()[:120]
+        if not key:
+            key = "auto:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
         with self.db.engine.begin() as conn:
             conn.execute(text("""
                 INSERT INTO memory(chat_id,user_id,memory_type,memory_key,memory_value,created_at,updated_at)
@@ -76,7 +80,7 @@ class MemoryStore:
                 "chat_id": chat_id,
                 "user_id": user_id,
                 "type": memory_type,
-                "key": memory_key.strip()[:120],
+                "key": key,
                 "value": value[:2000],
                 "now": now,
             })
