@@ -35,7 +35,7 @@ class Runtime:
         if chat_id in self.language_modes:return self.language_modes[chat_id]
         data=self.db.get_json('chat_settings','chat_id',chat_id,{}); mode=str(data.get('language_mode','auto')); self.language_modes[chat_id]=mode; return mode
     def save_language_mode(self,chat_id,mode):
-        allowed={'auto','en','ar','ar-MA','fr','es','tr','de','it','ja','ko','zh','pt','ru','uk','hi','ur','id','ms','tl','nl','pl','ro','cs','sk','hu','sv','no','da','fi'}
+        allowed={'auto','en','ar','ar-MA','fr','es','tr','de','it','ja','ko','zh','pt','ru','uk','el','he','hi','ur','id','ms','tl','nl','pl','ro','cs','sk','hu','sv','no','da','fi'}
         if mode not in allowed: mode='auto'
         data=self.db.get_json('chat_settings','chat_id',chat_id,{}); data['language_mode']=mode; self.db.save_chat_settings(chat_id,data); self.language_modes[chat_id]=mode
     def schedule_proactive(self,chat_id,force=False):
