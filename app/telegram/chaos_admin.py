@@ -64,27 +64,35 @@ def register(bot,runtime):
     mode=state(runtime.db).get('mad_mode','mix');modes={'mix':'🎲 MIX: عشوائي + AI','random':'🎲 RANDOM: عشوائي فقط','ai':'🤖 AI: AI فقط'};new={'mix':'random','random':'ai','ai':'mix'}[mode];save(runtime.db,mad_mode=new);bot.send_message(chat_id,'⚙️ وضع الرد: '+modes[new],reply_markup=menu());return
    t=target(runtime.db)
    if not t:return bot.send_message(chat_id,'🎯 اختار كروبًا أولًا.')
-   msgs=runtime.db.recent_messages(t,500)
+   msgs=runtime.db.recent_messages(t,500);words=toks(msgs)
    if d=='mad:send':save(runtime.db,mad_waiting='send');return bot.send_message(chat_id,'📨 أرسل الآن أي محتوى: نص، صورة، فيديو، Sticker، GIF أو ملف.')
    if d=='mad:random' and msgs:bot.copy_message(t,t,random.choice(msgs).message_id)
    elif d=='mad:remix':
-    words=toks(msgs);n=random.randint(3,min(15,len(words))) if words else 0;bot.send_message(t,' '.join(random.sample(words,n)) if n else '3:')
+    n=random.randint(3,min(15,len(words))) if words else 0;bot.send_message(t,' '.join(random.sample(words,n)) if n else '3:')
    elif d=='mad:payment':
     from telebot import types
-    amount=random.choice([10,25,50,100,250]);k=types.InlineKeyboardMarkup();k.add(types.InlineKeyboardButton(f'⭐ {amount} Stars',callback_data=f'mad:pay:{amount}'));bot.send_message(t,random.choice(['✨ اختيار عشوائي','🎁 افتح الاختيار','🪙 خيار اليوم','🎟️ جرّب هذا الاختيار']),reply_markup=k)
+    amount=random.randint(5,1000)
+    pool=words or ['Merva','اختيار','اليوم','شيء','عشوائي']
+    title=' '.join(random.sample(pool,min(random.randint(1,3),len(pool))))[:32]
+    description=' '.join(random.sample(pool,min(random.randint(2,6),len(pool))))[:255]
+    k=types.InlineKeyboardMarkup();k.add(types.InlineKeyboardButton(f'⭐ {amount} Stars',callback_data=f'mad:pay:{amount}'))
+    bot.send_message(t,random.choice(['✨ اختيار عشوائي','🎁 افتح الاختيار','🪙 خيار اليوم','🎟️ جرّب هذا الاختيار']),reply_markup=k)
+    save(runtime.db,mad_pending_payment={'chat_id':t,'amount':amount,'title':title,'description':description})
    elif d.startswith('mad:pay:'):
     from telebot import types
-    amount=max(1,min(10000,int(d.split(':')[-1])))
-    bot.send_invoice(t,'Merva purchase','Digital item',f'merva_item_{amount}','', 'XTR',[types.LabeledPrice('Merva item',amount)])
+    amount=max(5,min(1000,int(d.split(':')[-1])));pool=words or ['Merva','اختيار','اليوم','شيء','عشوائي']
+    title=' '.join(random.sample(pool,min(random.randint(1,3),len(pool))))[:32]
+    description=' '.join(random.sample(pool,min(random.randint(2,6),len(pool))))[:255]
+    bot.send_invoice(t,title,description,f'merva_item_{amount}','XTR',[types.LabeledPrice(title,amount)])
    elif d=='mad:mood':bot.send_message(t,random.choice(['3:','المود اليوم غريب شوية','صافي خليوها على الله','سلام لاباس؟ صافي مزيان','واش؟','مزيان هادي']))
    elif d=='mad:media':
     media=[m for m in msgs if getattr(m,'media_type',None)]
     if media:bot.copy_message(t,t,random.choice(media).message_id)
     else:return bot.send_message(chat_id,'🖼️ لا توجد وسائط محفوظة.')
    elif d=='mad:poll':
-    words=list(dict.fromkeys(toks(msgs)));random.shuffle(words);n=random.randint(3,min(10,len(words))) if len(words)>=3 else 0
+    pool=list(dict.fromkeys(words));random.shuffle(pool);n=random.randint(3,min(10,len(pool))) if len(pool)>=3 else 0
     if n:
-     options=random.sample(words,n);question=' '.join(random.sample(words,min(random.randint(1,4),len(words))))
+     options=random.sample(pool,n);question=' '.join(random.sample(pool,min(random.randint(1,4),len(pool))))
      bot.send_poll(t,question,options,is_anonymous=True)
     else:return bot.send_message(chat_id,'🗳️ الكلمات غير كافية.')
    elif d=='mad:status':bot.send_message(chat_id,f'🧪 الحالة\n🎯 {t}\n💬 {len(msgs)} رسالة\n🎲 Mode: {state(runtime.db).get("mad_mode","mix")}\n🤖 Auto: {"ON" if state(runtime.db).get("mad_auto") else "OFF"}',reply_markup=menu());return
