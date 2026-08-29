@@ -18,6 +18,7 @@ class MemoryHandlers:
         self.handlers = handlers
         self.store = MemoryStore(runtime.db)
         self._admin_waiting: dict[int, str] = {}
+        self._admin_context: dict[int, int] = {}
         self._patch_message_tracking()
         self._patch_context()
         self._register()
@@ -63,25 +64,28 @@ class MemoryHandlers:
         self.handlers._build_ai_context = types.MethodType(wrapped, self.handlers)
 
     def _register(self):
-        # Regular user memory commands remain available to everyone.
+        # These legacy commands are owner-only now; the visible control surface
+        # is the single /admin command.
         @self.bot.message_handler(commands=["remember"])
         def remember(message):
-            self._remember(message)
+            if is_owner(getattr(message.from_user, "id", None)):
+                self._remember(message)
 
         @self.bot.message_handler(commands=["memory"])
         def memory(message):
-            self._list(message)
+            if is_owner(getattr(message.from_user, "id", None)):
+                self._list(message)
 
         @self.bot.message_handler(commands=["forget"])
         def forget(message):
-            self._forget(message)
+            if is_owner(getattr(message.from_user, "id", None)):
+                self._forget(message)
 
         @self.bot.message_handler(commands=["clear_memory"])
         def clear_memory(message):
-            self._clear(message)
+            if is_owner(getattr(message.from_user, "id", None)):
+                self._clear(message)
 
-        # Unified owner-only control panel. It is intentionally not exposed
-        # in the global command menu. In groups, the owner receives it in DM.
         @self.bot.message_handler(commands=["admin"])
         def admin(message):
             if not is_owner(getattr(message.from_user, "id", None)):
@@ -98,7 +102,10 @@ class MemoryHandlers:
                 except Exception:
                     pass
                 return
-            self._admin_callback(call)
+            try:
+                self._admin_callback(call)
+            except Exception:
+                self.bot.answer_callback_query(call.id, "Operation failed", show_alert=True)
 
         @self.bot.message_handler(
             content_types=["text"],
@@ -110,8 +117,8 @@ class MemoryHandlers:
 
     @staticmethod
     def _args(message) -> str:
-        text = getattr(message, "text", "") or ""
-        return text.split(" ", 1)[1].strip() if " " in text else ""
+        value = getattr(message, "text", "") or ""
+        return value.split(" ", 1)[1].strip() if " " in value else ""
 
     def _remember(self, message):
         value = self._args(message)
@@ -155,23 +162,25 @@ class MemoryHandlers:
         except Exception:
             self.bot.reply_to(message, "❌ تعذر مسح الذاكرة الآن.")
 
+    def _target_chat(self, user_id: int, fallback: int) -> int:
+        return int(self._admin_context.get(user_id, fallback))
+
     def _open_admin(self, message):
         user_id = int(message.from_user.id)
-        target = message.chat.id
-        # Telegram bots cannot start a private conversation unless the user
-        # has opened the bot before. Try DM first; fall back to the current chat.
+        self._admin_context[user_id] = int(message.chat.id)
         if getattr(message.chat, "type", "") != "private":
             try:
                 self.bot.send_message(
                     user_id,
-                    "🔐 لوحة تحكم المالك — هذه الرسالة خاصة بك.",
+                    "🔐 لوحة تحكم المالك — هذه الرسالة خاصة بك.\n"
+                    f"المحادثة المحددة: {message.chat.title or message.chat.id}",
                     reply_markup=menu(),
                 )
                 self.bot.reply_to(message, "📩 أرسلت لك لوحة الإدارة على الخاص.")
                 return
             except Exception:
                 pass
-        self.bot.send_message(target, "🔐 لوحة تحكم المالك", reply_markup=menu())
+        self.bot.send_message(message.chat.id, "🔐 لوحة تحكم المالك", reply_markup=menu())
 
     def _edit(self, call, text_value, markup=None):
         try:
@@ -182,10 +191,7 @@ class MemoryHandlers:
                 reply_markup=markup,
             )
         except Exception:
-            try:
-                self.bot.send_message(call.message.chat.id, text_value, reply_markup=markup)
-            except Exception:
-                pass
+            self.bot.send_message(call.message.chat.id, text_value, reply_markup=markup)
 
     def _admin_callback(self, call):
         data = call.data
@@ -206,8 +212,17 @@ class MemoryHandlers:
             self._ask(call, "forget_memory", "🗑 أرسل رقم الذاكرة أو كلمة منها لحذفها:")
         elif data == "memadmin:clearmem":
             self._confirm_clear_memory(call)
+        elif data == "memadmin:clearmem_yes":
+            target = self._target_chat(int(call.from_user.id), call.message.chat.id)
+            count = self.store.clear(target, int(call.from_user.id))
+            self._edit(call, f"🧹 Deleted {count} memories from the selected chat.", memory_menu())
         elif data == "memadmin:messages":
             self._admin_messages(call)
+        elif data == "memadmin:messages_yes":
+            target = self._target_chat(int(call.from_user.id), call.message.chat.id)
+            with self.rt.db.engine.begin() as conn:
+                result = conn.execute(text("DELETE FROM chat_messages WHERE chat_id=:chat_id"), {"chat_id": target})
+            self._edit(call, f"🧹 Deleted {int(result.rowcount or 0)} stored messages.", menu())
         elif data == "memadmin:media":
             self._admin_media(call)
         elif data == "memadmin:users":
@@ -226,10 +241,10 @@ class MemoryHandlers:
         self._edit(call, prompt)
 
     def _admin_list_memory(self, call):
-        # Admin memory panel defaults to the owner's private-chat memory.
-        items = self.store.list_memories(call.message.chat.id, call.from_user.id, 50)
+        target = self._target_chat(int(call.from_user.id), call.message.chat.id)
+        items = self.store.list_memories(target, int(call.from_user.id), 50)
         if not items:
-            self._edit(call, "🧠 لا توجد ذكريات في هذه المحادثة.", memory_menu())
+            self._edit(call, "🧠 لا توجد ذكريات في المحادثة المحددة.", memory_menu())
             return
         lines = ["🧠 ذكريات المالك:", ""]
         for item in items[:40]:
@@ -242,25 +257,26 @@ class MemoryHandlers:
             tg_types.InlineKeyboardButton("✅ نعم احذف", callback_data="memadmin:clearmem_yes"),
             tg_types.InlineKeyboardButton("❌ إلغاء", callback_data="memadmin:memory"),
         )
-        self._edit(call, "⚠️ سيحذف كل ذكرياتك الدائمة في هذه المحادثة. متأكد؟", kb)
+        self._edit(call, "⚠️ سيحذف كل ذكرياتك في المحادثة المحددة. متأكد؟", kb)
 
     def _admin_messages(self, call):
+        target = self._target_chat(int(call.from_user.id), call.message.chat.id)
         with self.rt.db.engine.connect() as conn:
-            row = conn.execute(text("SELECT COUNT(*) AS n FROM chat_messages")).mappings().first()
+            row = conn.execute(text("SELECT COUNT(*) AS n FROM chat_messages WHERE chat_id=:chat_id"), {"chat_id": target}).mappings().first()
         n = int(row["n"] if row else 0)
         kb = tg_types.InlineKeyboardMarkup(row_width=1)
-        kb.add(tg_types.InlineKeyboardButton("🧹 Delete all stored messages", callback_data="memadmin:messages_yes"))
+        kb.add(tg_types.InlineKeyboardButton("🧹 Delete stored messages", callback_data="memadmin:messages_yes"))
         kb.add(tg_types.InlineKeyboardButton("⬅️ Back", callback_data="memadmin:back"))
-        self._edit(call, f"💬 Stored messages: {n}", kb)
+        self._edit(call, f"💬 Stored messages in selected chat: {n}", kb)
 
     def _admin_media(self, call):
         total = 0
         try:
-            total = sum(self.rt.images.count(chat_id) for chat_id in self.rt.images.data)
+            target = self._target_chat(int(call.from_user.id), call.message.chat.id)
+            total = self.rt.images.count(target)
         except Exception:
             pass
-        self._edit(call, f"🖼 Media cache currently loaded: {total}\n
-Telegram file_id is used; actual image files are not stored on the server.", menu())
+        self._edit(call, f"🖼 Media cache in selected chat: {total}\n\nTelegram file_id is used; actual image files are not stored on the server.", menu())
 
     def _admin_users(self, call):
         with self.rt.db.engine.connect() as conn:
@@ -291,14 +307,15 @@ Telegram file_id is used; actual image files are not stored on the server.", men
             return
         value = (getattr(message, "text", "") or "").strip()
         try:
+            target = self._target_chat(user_id, message.chat.id)
             if action == "add_memory":
-                self.store.remember(message.chat.id, user_id, value)
+                self.store.remember(target, user_id, value)
                 self.bot.send_message(message.chat.id, "🧠 Saved.", reply_markup=menu())
             elif action == "forget_memory":
-                count = self.store.forget(message.chat.id, user_id, value)
+                count = self.store.forget(target, user_id, value)
                 self.bot.send_message(message.chat.id, f"🗑 Deleted: {count}", reply_markup=menu())
             elif action == "search_memory":
-                items = self.store.search(message.chat.id, user_id, value, 20)
+                items = self.store.search(target, user_id, value, 20)
                 body = "\n".join(f"#{x['id']} — {x['memory_value'][:500]}" for x in items) or "No matches."
                 self.bot.send_message(message.chat.id, "🔎 Results:\n" + body, reply_markup=menu())
             elif action == "add_key":
