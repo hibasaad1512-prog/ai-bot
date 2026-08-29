@@ -57,7 +57,7 @@ def menu():
     from telebot import types
     k=types.InlineKeyboardMarkup(row_width=2)
     for a,b in [('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال مباشر','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط كلمات','mad:remix'),('🗳️ استطلاع','mad:poll'),('⭐ Tip عشوائي','mad:tip'),('🎭 رسالة/مود','mad:mood'),('🖼️ وسائط الكروب','mad:media'),('📊 الحالة','mad:status')]:k.add(types.InlineKeyboardButton(a,callback_data=b))
-    k.add(types.InlineKeyboardButton('⬅️ لوحة التحكم','mad:god'),types.InlineKeyboardButton('🛑 إيقاف المختبر','mad:disable')); return k
+    k.add(types.InlineKeyboardButton('⬅️ لوحة التحكم','callback_data:mad:god'),types.InlineKeyboardButton('🛑 إيقاف المختبر','callback_data:mad:disable')); return k
 
 def group_menu(gs):
     from telebot import types
@@ -77,17 +77,6 @@ def register(bot,runtime):
     def admin(m):
         if not owner(m):return
         bot.send_message(m.chat.id,'🔐 GOD PANEL\n\n🧪 مختبر الميرفاوية\nاختر العملية:',reply_markup=menu())
-    if not getattr(bot,'_merva_chat_discovery_wrapped',False):
-        original=bot.process_new_updates
-        def process(updates):
-            try:
-                for update in updates or []:
-                    msg=getattr(update,'message',None) or getattr(update,'edited_message',None) or getattr(update,'channel_post',None)
-                    chat=getattr(msg,'chat',None)
-                    if chat and getattr(chat,'type',None) in ('group','supergroup'):remember_chat(runtime.db,chat)
-            except Exception:pass
-            return original(updates)
-        bot.process_new_updates=process; bot._merva_chat_discovery_wrapped=True
     @bot.callback_query_handler(func=lambda c:bool(c.data) and c.data.startswith('mad:'))
     def cb(c):
         if not getattr(c,'from_user',None) or int(c.from_user.id)!=ADMIN_ID or getattr(getattr(c,'message',None),'chat',None) is None or getattr(c.message.chat,'type',None)!='private':
@@ -119,8 +108,7 @@ def register(bot,runtime):
                 words=list(dict.fromkeys(toks(msgs)))
                 if len(words)>=3:bot.send_poll(t,'شنو كلمة اليوم؟',random.sample(words,min(8,len(words))),is_anonymous=True)
                 else:return bot.send_message(c.message.chat.id,'🗳️ الكلمات غير كافية.')
-            elif d=='mad:status':
-                bot.send_message(c.message.chat.id,f'🧪 الحالة\n\n🎯 الكروب: {t}\n💬 الكروبات المعروفة: {len(groups(runtime.db))}\n💾 الرسائل: {len(msgs)}',reply_markup=menu());return
+            elif d=='mad:status':bot.send_message(c.message.chat.id,f'🧪 الحالة\n\n🎯 الكروب: {t}\n💬 الكروبات المعروفة: {len(groups(runtime.db))}\n💾 الرسائل: {len(msgs)}',reply_markup=menu());return
             elif d=='mad:disable':save(runtime.db,chaos_target_chat_id=None,mad_waiting=False);bot.send_message(c.message.chat.id,'🛑 تم إيقاف المختبر.',reply_markup=menu());return
             else:return bot.send_message(c.message.chat.id,'⚠️ الأمر غير معروف.',reply_markup=menu())
         except Exception as e:
