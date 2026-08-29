@@ -56,9 +56,10 @@ def toks(msgs):
 def menu():
     from telebot import types
     k=types.InlineKeyboardMarkup(row_width=2)
-    for a,b in [('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال مباشر','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط كلمات','mad:remix'),('🗳️ استطلاع','mad:poll'),('⭐ Tip عشوائي','mad:tip'),('🎭 رسالة/مود','mad:mood'),('🖼️ وسائط الكروب','mad:media'),('📊 الحالة','mad:status')]:k.add(types.InlineKeyboardButton(a,callback_data=b))
-    # No legacy navigation/URL button. Reopen the panel with /admin.
-    k.add(types.InlineKeyboardButton('🛑 إيقاف المختبر','callback_data=mad:disable')); return k
+    for a,b in [('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال مباشر','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط كلمات','mad:remix'),('🗳️ استطلاع','mad:poll'),('⭐ Tip عشوائي','mad:tip'),('🎭 رسالة/مود','mad:mood'),('🖼️ وسائط الكروب','mad:media'),('📊 الحالة','mad:status')]:
+        k.add(types.InlineKeyboardButton(a,callback_data=b))
+    k.add(types.InlineKeyboardButton('🛑 إيقاف المختبر',callback_data='mad:disable'))
+    return k
 
 def group_menu(gs):
     from telebot import types
@@ -67,7 +68,8 @@ def group_menu(gs):
     for g in gs:
         label=g.get('title') or (('@'+g['username']) if g.get('username') else str(g['chat_id']))
         k.add(types.InlineKeyboardButton(f"🎯 {label} · {g.get('messages',0)} رسالة",callback_data=f"mad:select:{g['chat_id']}"))
-    k.add(types.InlineKeyboardButton('➕ تعريف كروب',callback_data='mad:addchat'),types.InlineKeyboardButton('🔄 تحديث',callback_data='mad:chats'),types.InlineKeyboardButton('⬅️ رجوع',callback_data='mad:open')); return k
+    k.add(types.InlineKeyboardButton('➕ تعريف كروب',callback_data='mad:addchat'),types.InlineKeyboardButton('🔄 تحديث',callback_data='mad:chats'),types.InlineKeyboardButton('⬅️ رجوع',callback_data='mad:open'))
+    return k
 
 def safe_answer(bot,c,text=None,alert=False):
     try:bot.answer_callback_query(c.id,text or '',show_alert=alert)
@@ -78,6 +80,7 @@ def register(bot,runtime):
     def admin(m):
         if not owner(m):return
         bot.send_message(m.chat.id,'🔐 GOD PANEL\n\n🧪 مختبر الميرفاوية\nاختر العملية:',reply_markup=menu())
+
     @bot.callback_query_handler(func=lambda c:bool(c.data) and c.data.startswith('mad:'))
     def cb(c):
         if not getattr(c,'from_user',None) or int(c.from_user.id)!=ADMIN_ID or getattr(getattr(c,'message',None),'chat',None) is None or getattr(c.message.chat,'type',None)!='private':
@@ -115,6 +118,7 @@ def register(bot,runtime):
         except Exception:
             import logging; logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d)
             bot.send_message(c.message.chat.id,'❌ Merva Lab error. Check Render logs.')
+
     @bot.message_handler(content_types=['text','photo','video','sticker','animation','document','audio','voice','video_note'],func=lambda m:owner(m) and bool(state(runtime.db).get('mad_waiting')))
     def lab_input(m):
         mode=state(runtime.db).get('mad_waiting'); t=target(runtime.db)
