@@ -9,7 +9,7 @@ from io import BytesIO
 from app.ai.dialect import detect
 from app.ai.humanizer import humanize
 from app.ai.prompts import response_prompt
-from app.chaos.actions import Action, DEFAULT_ACTIONS
+from app.chaos.actions import Action
 from app.config import settings
 from app.images.collage import collage, side_by_side
 from app.images.meme import caption_meme
@@ -28,18 +28,24 @@ log = logging.getLogger(__name__)
 
 
 class TelegramHandlers:
-    """Telegram command + message handlers.
+    """Telegram handlers for الميرفاوية.
 
-    Commands are handled locally. Any other text message is sent directly to Groq
-    and turned into a normal Kyoos reply. There is deliberately no local
-    "should I answer?" gate in the normal message path: that gate was the main
-    reason legitimate messages were silently ignored.
+    Normal messages have:
+    - configurable reply chance
+    - configurable random delay
+    - per-user reply limit
+    - per-user cooldown after reaching the limit
     """
 
     def __init__(self, bot, runtime):
         self.bot = bot
         self.rt = runtime
-        self._bot_username = ""
+        self._bot_username = "الميرفاوية"
+
+        # Per chat/user reply tracking.
+        # {(chat_id, user_id): {"count": int, "reset_at": float}}
+        self._user_reply_limits: dict[tuple[int, int], dict[str, float | int]] = {}
+
         self._register()
 
     def _register(self):
@@ -48,9 +54,12 @@ class TelegramHandlers:
         @self.bot.message_handler(commands=["start"])
         def start(m):
             if is_group(m.chat.type):
-                self.bot.reply_to(m, "i'm here 😭")
+                self.bot.reply_to(m, "أنا هنا 🐱")
             else:
-                self.bot.send_message(m.chat.id, "lmyrfawya is online. send me anything")
+                self.bot.send_message(
+                    m.chat.id,
+                    "الميرفاوية هنا 🎀"
+                )
 
         @self.bot.message_handler(commands=["settings"])
         def settings_cmd(m):
@@ -62,23 +71,43 @@ class TelegramHandlers:
                 return
 
             lines = [
-                "KYOOS AI TEST",
+                "LMYRFAWYA AI TEST",
                 f"Provider: Groq {'✅' if self.rt.ai.enabled else '❌'}",
             ]
+
             if not self.rt.ai.enabled:
-                lines.append("Text API: ❌ GROQ_API_KEY missing or Groq client failed to initialize")
+                lines.append(
+                    "Text API: ❌ GROQ_API_KEY missing or Groq client failed to initialize"
+                )
             else:
                 try:
-                    text = self.rt.ai.generate_text("Reply with exactly: ping")
-                    lines.append(f"Text API: {'✅' if text.strip() else '❌'}")
+                    text = self.rt.ai.generate_text(
+                        "Reply with exactly: ping"
+                    )
+
+                    lines.append(
+                        f"Text API: {'✅' if text.strip() else '❌'}"
+                    )
+
                     if text.strip() and text.strip().lower() != "ping":
-                        lines.append(f"Reply: {text[:120]}")
+                        lines.append(
+                            f"Reply: {text[:120]}"
+                        )
+
                 except Exception as exc:
                     log.exception("/testai failed")
-                    lines.append(f"Text API: ❌ {type(exc).__name__}: {str(exc)[:160]}")
+                    lines.append(
+                        f"Text API: ❌ {type(exc).__name__}: {str(exc)[:160]}"
+                    )
 
-            lines.append("Runtime mode: direct Groq reply for every non-command text message")
-            self.bot.send_message(m.chat.id, "\n".join(lines))
+            lines.append(
+                "Runtime mode: 80% reply chance with per-user limits and random delay"
+            )
+
+            self.bot.send_message(
+                m.chat.id,
+                "\n".join(lines)
+            )
 
         @self.bot.callback_query_handler(
             func=lambda c: c.data.startswith("panel:")
@@ -87,36 +116,56 @@ class TelegramHandlers:
         )
         def callbacks(c):
             if not can_use_settings_callback(self.bot, c):
-                self.bot.answer_callback_query(c.id, "group admins only", show_alert=True)
+                self.bot.answer_callback_query(
+                    c.id,
+                    "group admins only",
+                    show_alert=True,
+                )
                 return
+
             chat_id = c.message.chat.id
             p = self.rt.personality(chat_id)
             data = c.data
+
             try:
                 if data == "panel:back":
                     self.bot.edit_message_text(
-                        "KYOOS settings",
+                        "الميرفاوية settings",
                         chat_id,
                         c.message.message_id,
-                        reply_markup=panel(p, self.rt.get_language_mode(chat_id)),
+                        reply_markup=panel(
+                            p,
+                            self.rt.get_language_mode(chat_id),
+                        ),
                     )
+
                 elif data == "language:show":
                     self.bot.edit_message_reply_markup(
                         chat_id,
                         c.message.message_id,
-                        reply_markup=language_panel(self.rt.get_language_mode(chat_id)),
+                        reply_markup=language_panel(
+                            self.rt.get_language_mode(chat_id)
+                        ),
                     )
+
                 elif data.startswith("language:set:"):
                     mode = data.split(":", 2)[2]
-                    self.rt.save_language_mode(chat_id, mode)
+
+                    self.rt.save_language_mode(
+                        chat_id,
+                        mode,
+                    )
+
                     self.bot.edit_message_text(
-                        "KYOOS settings",
+                        "الميرفاوية settings",
                         chat_id,
                         c.message.message_id,
                         reply_markup=panel(p, mode),
                     )
+
                 elif data.startswith("set:"):
                     _, key, delta = data.split(":")
+
                     if delta == "show":
                         self.bot.edit_message_reply_markup(
                             chat_id,
@@ -124,24 +173,34 @@ class TelegramHandlers:
                             reply_markup=adjust_panel(p, key),
                         )
                     else:
-                        value = max(0, min(100, getattr(p, key) + int(delta)))
+                        value = max(
+                            0,
+                            min(
+                                100,
+                                getattr(p, key) + int(delta),
+                            ),
+                        )
+
                         setattr(p, key, value)
                         self.rt.save_personality(chat_id, p)
+
                         self.bot.edit_message_reply_markup(
                             chat_id,
                             c.message.message_id,
                             reply_markup=adjust_panel(p, key),
                         )
+
             except Exception:
-                log.exception("settings callback failed")
+                log.exception(
+                    "settings callback failed"
+                )
+
             finally:
                 try:
                     self.bot.answer_callback_query(c.id)
                 except Exception:
                     pass
 
-        # IMPORTANT: this generic handler only matches non-command messages.
-        # This prevents /start, /settings and /testai from being swallowed by it.
         @self.bot.message_handler(
             content_types=["text", "photo"],
             func=is_non_command_message,
@@ -149,30 +208,53 @@ class TelegramHandlers:
         def normal_message(m):
             self.on_message(m)
 
-        @self.bot.message_handler(content_types=["text"], func=lambda m: bool(m.text) and m.text.strip().upper() == "JOIN")
+        @self.bot.message_handler(
+            content_types=["text"],
+            func=lambda m: bool(m.text)
+            and m.text.strip().upper() == "JOIN",
+        )
         def game_join(m):
-            if not self.rt.games.join(m.chat.id, m.from_user.id):
+            if not self.rt.games.join(
+                m.chat.id,
+                m.from_user.id,
+            ):
                 return
-            self.bot.reply_to(m, "joined")
+
+            self.bot.reply_to(
+                m,
+                "joined"
+            )
 
     def admin_command(self, m):
         if not can_use_settings(self.bot, m):
             if getattr(m.chat, "type", None) == "private":
-                self.bot.send_message(m.chat.id, "⚙️ /settings is available inside groups for admins")
+                self.bot.send_message(
+                    m.chat.id,
+                    "⚙️ /settings is available inside groups for admins",
+                )
             return
+
         self.bot.send_message(
             m.chat.id,
-            "KYOOS settings",
-            reply_markup=panel(self.rt.personality(m.chat.id), self.rt.get_language_mode(m.chat.id)),
+            "الميرفاوية settings",
+            reply_markup=panel(
+                self.rt.personality(m.chat.id),
+                self.rt.get_language_mode(m.chat.id),
+            ),
         )
 
-    def _remember_bot_reply(self, m, text: str, reply_to: int | None = None) -> None:
+    def _remember_bot_reply(
+        self,
+        m,
+        text: str,
+        reply_to: int | None = None,
+    ) -> None:
         self.rt.memory.add(
             ChatMessage(
                 chat_id=m.chat.id,
                 message_id=int(time.time() * 1000),
                 user_id=0,
-                display_name=self._bot_username or "KYOOS",
+                display_name=self._bot_username,
                 timestamp=time.time(),
                 text=text,
                 reply_to_message_id=reply_to,
@@ -180,16 +262,134 @@ class TelegramHandlers:
             )
         )
 
+    def _can_reply_to_user(
+        self,
+        chat_id: int,
+        user_id: int,
+    ) -> bool:
+        """Check per-user limit and cooldown."""
+
+        key = (chat_id, user_id)
+        now = time.time()
+
+        state = self._user_reply_limits.get(key)
+
+        if not state:
+            return True
+
+        reset_at = float(state.get("reset_at", 0))
+
+        # Cooldown finished -> start fresh.
+        if now >= reset_at:
+            self._user_reply_limits.pop(key, None)
+            return True
+
+        count = int(state.get("count", 0))
+        limit = getattr(
+            settings,
+            "same_user_limit",
+            2,
+        )
+
+        return count < limit
+
+    def _record_user_reply(
+        self,
+        chat_id: int,
+        user_id: int,
+    ) -> None:
+        """Record one reply to a user."""
+
+        key = (chat_id, user_id)
+        now = time.time()
+
+        limit = getattr(
+            settings,
+            "same_user_limit",
+            2,
+        )
+
+        cooldown = getattr(
+            settings,
+            "same_user_cooldown",
+            180,
+        )
+
+        state = self._user_reply_limits.get(key)
+
+        if not state:
+            state = {
+                "count": 0,
+                "reset_at": now + cooldown,
+            }
+
+        count = int(state.get("count", 0)) + 1
+
+        state["count"] = count
+
+        # Once the user reaches the limit,
+        # they remain blocked until the cooldown ends.
+        if count >= limit:
+            state["reset_at"] = now + cooldown
+
+        self._user_reply_limits[key] = state
+
+    def _reply_chance_passes(self) -> bool:
+        """Return True when the random reply chance allows a response."""
+
+        chance = getattr(
+            settings,
+            "reply_chance",
+            80,
+        )
+
+        chance = max(
+            0,
+            min(100, int(chance)),
+        )
+
+        return random.random() * 100 < chance
+
+    def _random_reply_delay(self) -> float:
+        """Return a random delay between configured limits."""
+
+        minimum = float(
+            getattr(
+                settings,
+                "reply_delay_min",
+                1.5,
+            )
+        )
+
+        maximum = float(
+            getattr(
+                settings,
+                "reply_delay_max",
+                4.0,
+            )
+        )
+
+        if maximum < minimum:
+            minimum, maximum = maximum, minimum
+
+        return random.uniform(
+            minimum,
+            maximum,
+        )
+
     def on_message(self, m):
         if not m.from_user:
             return
 
         text = m.text or m.caption or ""
+
         image_file_id = None
         media_type = None
+
         if m.photo:
             media_type = "photo"
             image_file_id = m.photo[-1].file_id
+
             self.rt.images.add(
                 ImageRef(
                     m.chat.id,
@@ -206,35 +406,63 @@ class TelegramHandlers:
             m.chat.id,
             m.message_id,
             m.from_user.id,
-            m.from_user.first_name or m.from_user.username or "user",
+            m.from_user.first_name
+            or m.from_user.username
+            or "user",
             m.date or time.time(),
             text,
-            m.reply_to_message.message_id if m.reply_to_message else None,
+            m.reply_to_message.message_id
+            if m.reply_to_message
+            else None,
             media_type,
             image_file_id,
-            bool(getattr(m.from_user, "is_bot", False)),
+            bool(
+                getattr(
+                    m.from_user,
+                    "is_bot",
+                    False,
+                )
+            ),
         )
+
         self.rt.memory.add(cm)
 
-        # Keep moderation independent. If moderation deletes the message, do not
-        # send an AI response to the content that was removed.
+        # Ignore bot messages.
+        if getattr(m.from_user, "is_bot", False):
+            return
+
+        # Moderation stays independent.
         if text and settings.enabled_moderation:
             try:
                 mod = self.rt.moderation.detect(
                     text,
-                    [x.text for x in self.rt.memory.recent(m.chat.id, 12) if x.text],
+                    [
+                        x.text
+                        for x in self.rt.memory.recent(
+                            m.chat.id,
+                            12,
+                        )
+                        if x.text
+                    ],
                 )
+
                 if mod and mod.action == "delete":
                     try:
-                        self.bot.delete_message(m.chat.id, m.message_id)
+                        self.bot.delete_message(
+                            m.chat.id,
+                            m.message_id,
+                        )
                     except Exception:
                         pass
-                    return
-            except Exception:
-                log.exception("moderation check failed; continuing to AI")
 
-        # Photo without a caption: store it for the image pool, but do not fake
-        # visual understanding because this build does not use a vision model.
+                    return
+
+            except Exception:
+                log.exception(
+                    "moderation check failed; continuing to AI"
+                )
+
+        # Photo without caption: store it only.
         if m.photo and not text:
             return
 
@@ -242,25 +470,102 @@ class TelegramHandlers:
             return
 
         if not self.rt.ai.enabled:
-            self.bot.send_message(m.chat.id, "⚠️ AI is not configured right now")
+            self.bot.send_message(
+                m.chat.id,
+                "⚠️ AI is not configured right now",
+            )
             return
 
-        recent = self.rt.memory.recent(m.chat.id, 16)
-        context = self.rt.memory.text(m.chat.id, 12)
-        lang = detect([x.text for x in recent if x.text])
-        personality = self.rt.personality(m.chat.id)
+        user_id = m.from_user.id
+
+        # ---------------------------------------------------------
+        # 1. Per-user limit
+        # ---------------------------------------------------------
+        if not self._can_reply_to_user(
+            m.chat.id,
+            user_id,
+        ):
+            log.info(
+                "Reply skipped: user %s reached personal reply limit in chat %s",
+                user_id,
+                m.chat.id,
+            )
+            return
+
+        # ---------------------------------------------------------
+        # 2. 80% reply chance
+        # ---------------------------------------------------------
+        if not self._reply_chance_passes():
+            log.info(
+                "Reply skipped by chance: chat=%s user=%s",
+                m.chat.id,
+                user_id,
+            )
+            return
+
+        # ---------------------------------------------------------
+        # 3. Random human-like delay
+        # ---------------------------------------------------------
+        delay = self._random_reply_delay()
+
+        try:
+            time.sleep(delay)
+        except Exception:
+            pass
+
+        recent = self.rt.memory.recent(
+            m.chat.id,
+            16,
+        )
+
+        context = self.rt.memory.text(
+            m.chat.id,
+            12,
+        )
+
+        lang = detect(
+            [
+                x.text
+                for x in recent
+                if x.text
+            ]
+        )
+
+        personality = self.rt.personality(
+            m.chat.id
+        )
+
         signals = None
 
         direct_context = (
-            f"Latest user message: {m.from_user.first_name or m.from_user.username or 'user'}: {text[:1000]}\n"
+            f"Latest user message: "
+            f"{m.from_user.first_name or m.from_user.username or 'user'}: "
+            f"{text[:1000]}\n"
         )
-        if m.reply_to_message and m.reply_to_message.text:
-            direct_context += f"Reply target: {m.reply_to_message.text[:600]}\n"
+
+        if (
+            m.reply_to_message
+            and m.reply_to_message.text
+        ):
+            direct_context += (
+                f"Reply target: "
+                f"{m.reply_to_message.text[:600]}\n"
+            )
 
         try:
-            state = self.rt.db.get_json("chat_settings", "chat_id", m.chat.id, {})
+            state = self.rt.db.get_json(
+                "chat_settings",
+                "chat_id",
+                m.chat.id,
+                {},
+            )
+
             state["language"] = lang.as_dict()
-            self.rt.db.save_chat_settings(m.chat.id, state)
+
+            self.rt.db.save_chat_settings(
+                m.chat.id,
+                state,
+            )
 
             prompt = response_prompt(
                 f"{context}\n{direct_context}",
@@ -270,70 +575,174 @@ class TelegramHandlers:
                 target=text,
                 signals=signals,
             )
-            reply = self.rt.ai.generate_text(prompt)
-            reply = humanize(reply, personality, lang.as_dict())
-            reply = self._clean_reply(reply)
 
+            reply = self.rt.ai.generate_text(
+                prompt
+            )
+
+            reply = humanize(
+                reply,
+                personality,
+                lang.as_dict(),
+            )
+
+            reply = self._clean_reply(
+                reply
+            )
+
+            # If Groq returns nothing, do not waste one
+            # of the user's reply slots.
             if not reply:
-                # Always give the user a deterministic response instead of silent
-                # failure when the model returns an empty string.
-                reply = "nah 😭"
+                return
 
-            reply_to_id = m.message_id if is_group(m.chat.type) else None
+            reply_to_id = (
+                m.message_id
+                if is_group(m.chat.type)
+                else None
+            )
+
             self.bot.send_message(
                 m.chat.id,
                 reply[:1000],
                 reply_to_message_id=reply_to_id,
                 allow_sending_without_reply=True,
             )
-            self._remember_bot_reply(m, reply[:1000], reply_to_id)
-            self.rt.chaos.cooldowns.record_action(m.chat.id)
-        except Exception as exc:
-            log.exception("direct AI reply failed")
-            # Never leave the user with total silence on a transient API error.
-            fallback = "groq is tripping rn 😭"
-            try:
-                self.bot.send_message(m.chat.id, fallback)
-                self._remember_bot_reply(m, fallback)
-            except Exception:
-                log.exception("fallback AI error message failed")
+
+            # Only count an actual successful response.
+            self._record_user_reply(
+                m.chat.id,
+                user_id,
+            )
+
+            self._remember_bot_reply(
+                m,
+                reply[:1000],
+                reply_to_id,
+            )
+
+            self.rt.chaos.cooldowns.record_action(
+                m.chat.id
+            )
+
+        except Exception:
+            log.exception(
+                "direct AI reply failed"
+            )
 
     @staticmethod
     def _clean_reply(text: str) -> str:
         text = (text or "").strip()
-        # Remove accidental markdown fences/quotes around a plain chat reply.
-        text = re.sub(r"^```(?:text)?\s*|\s*```$", "", text, flags=re.I).strip()
-        text = text.strip('"')
+
+        # Remove accidental markdown fences.
+        text = re.sub(
+            r"^```(?:text)?\s*|\s*```$",
+            "",
+            text,
+            flags=re.I,
+        ).strip()
+
+        # Remove accidental wrapping quotes.
+        text = text.strip('"').strip()
+
         return text[:1000]
 
-    # Kept for compatibility with the existing chaos/image modules.
+    # Kept for compatibility with existing chaos/image modules.
     def proactive(self, chat_id: int):
-        recent = self.rt.memory.recent(chat_id, 40)
+        recent = self.rt.memory.recent(
+            chat_id,
+            40,
+        )
+
         if not recent or not self.rt.ai.enabled:
             return
-        p = self.rt.personality(chat_id)
+
+        p = self.rt.personality(
+            chat_id
+        )
+
         now = time.time()
         last = recent[-1].timestamp
-        if now - last < settings.proactive_quiet_seconds or p.proactivity < 25:
-            return
-        if self.rt.chaos.cooldowns.active(f"chat:{chat_id}"):
-            return
-        if self.rt.chaos.cooldowns.hourly_count(chat_id) >= settings.soft_hourly_limit:
-            return
-        context = self.rt.memory.text(chat_id, 12)
-        lang = detect([x.text for x in recent if x.text])
-        try:
-            txt = self.rt.ai.generate_text(response_prompt(context, lang, p, "PROACTIVE"))
-            txt = humanize(txt, p, lang.as_dict())
-            if txt:
-                self.bot.send_message(chat_id, txt[:1000])
-                self.rt.chaos.cooldowns.record_action(chat_id)
-        except Exception:
-            log.exception("proactive action failed")
 
-    # Existing optional chaos action API retained so older code/tests can call it.
-    def execute(self, m, action, context, lang, target_id, signals=None):
-        p = self.rt.personality(m.chat.id)
+        if (
+            now - last
+            < settings.proactive_quiet_seconds
+            or p.proactivity < 25
+        ):
+            return
+
+        if self.rt.chaos.cooldowns.active(
+            f"chat:{chat_id}"
+        ):
+            return
+
+        if (
+            self.rt.chaos.cooldowns.hourly_count(
+                chat_id
+            )
+            >= settings.soft_hourly_limit
+        ):
+            return
+
+        context = self.rt.memory.text(
+            chat_id,
+            12,
+        )
+
+        lang = detect(
+            [
+                x.text
+                for x in recent
+                if x.text
+            ]
+        )
+
+        try:
+            txt = self.rt.ai.generate_text(
+                response_prompt(
+                    context,
+                    lang,
+                    p,
+                    "PROACTIVE",
+                )
+            )
+
+            txt = humanize(
+                txt,
+                p,
+                lang.as_dict(),
+            )
+
+            txt = self._clean_reply(txt)
+
+            if txt:
+                self.bot.send_message(
+                    chat_id,
+                    txt[:1000],
+                )
+
+                self.rt.chaos.cooldowns.record_action(
+                    chat_id
+                )
+
+        except Exception:
+            log.exception(
+                "proactive action failed"
+            )
+
+    # Existing optional chaos action API retained.
+    def execute(
+        self,
+        m,
+        action,
+        context,
+        lang,
+        target_id,
+        signals=None,
+    ):
+        p = self.rt.personality(
+            m.chat.id
+        )
+
         reply_id = target_id or m.message_id
 
         if action in {
@@ -347,15 +756,45 @@ class TelegramHandlers:
             Action.FAKE_ANNOUNCEMENT,
         }:
             focus = next(
-                (x for x in reversed(self.rt.memory.recent(m.chat.id, 40)) if x.message_id == target_id),
+                (
+                    x
+                    for x in reversed(
+                        self.rt.memory.recent(
+                            m.chat.id,
+                            40,
+                        )
+                    )
+                    if x.message_id == target_id
+                ),
                 None,
             )
-            focus_text = f"Target: {focus.display_name}: {focus.text}" if focus and focus.text else ""
+
+            focus_text = (
+                f"Target: {focus.display_name}: {focus.text}"
+                if focus and focus.text
+                else ""
+            )
+
             try:
                 txt = self.rt.ai.generate_text(
-                    response_prompt(context, lang, p, action.value, target=focus_text, signals=signals)
+                    response_prompt(
+                        context,
+                        lang,
+                        p,
+                        action.value,
+                        target=focus_text,
+                        signals=signals,
+                    )
                 )
-                txt = humanize(txt, p, lang.as_dict())
+
+                txt = humanize(
+                    txt,
+                    p,
+                    lang.as_dict(),
+                )
+
+                txt = self._clean_reply(txt)
+
                 if txt:
                     self.bot.send_message(
                         m.chat.id,
@@ -363,60 +802,202 @@ class TelegramHandlers:
                         reply_to_message_id=reply_id,
                         allow_sending_without_reply=True,
                     )
+
             except Exception:
-                log.exception("text action failed")
+                log.exception(
+                    "text action failed"
+                )
+
             return
 
-        if action in {Action.RANDOM_IMAGE, Action.IMAGE_CAPTION, Action.CONTEXT_MEME}:
-            ref = self.rt.images.choose(m.chat.id)
+        if action in {
+            Action.RANDOM_IMAGE,
+            Action.IMAGE_CAPTION,
+            Action.CONTEXT_MEME,
+        }:
+            ref = self.rt.images.choose(
+                m.chat.id
+            )
+
             if not ref:
                 return
+
             try:
-                info = self.bot.get_file(ref.telegram_file_id)
-                raw = self.bot.download_file(info.file_path)
-                caption = self.rt.ai.generate_text(response_prompt(context, lang, p, action.value))
-                caption = humanize(caption, p, lang.as_dict())
+                info = self.bot.get_file(
+                    ref.telegram_file_id
+                )
+
+                raw = self.bot.download_file(
+                    info.file_path
+                )
+
+                caption = self.rt.ai.generate_text(
+                    response_prompt(
+                        context,
+                        lang,
+                        p,
+                        action.value,
+                    )
+                )
+
+                caption = humanize(
+                    caption,
+                    p,
+                    lang.as_dict(),
+                )
+
+                caption = self._clean_reply(
+                    caption
+                )
+
                 if action == Action.CONTEXT_MEME:
-                    out = caption_meme(raw, caption)
-                    self.bot.send_photo(m.chat.id, out, caption=None, reply_to_message_id=reply_id)
+                    out = caption_meme(
+                        raw,
+                        caption,
+                    )
+
+                    self.bot.send_photo(
+                        m.chat.id,
+                        out,
+                        caption=None,
+                        reply_to_message_id=reply_id,
+                    )
+
                 else:
-                    self.bot.send_photo(m.chat.id, BytesIO(raw), caption=caption[:1024], reply_to_message_id=reply_id)
-                self.rt.images.mark_used(ref)
+                    self.bot.send_photo(
+                        m.chat.id,
+                        BytesIO(raw),
+                        caption=caption[:1024],
+                        reply_to_message_id=reply_id,
+                    )
+
+                self.rt.images.mark_used(
+                    ref
+                )
+
             except Exception:
-                log.exception("image action failed")
+                log.exception(
+                    "image action failed"
+                )
+
             return
 
-        if action in {Action.IMAGE_MASHUP, Action.COLLAGE}:
-            a = self.rt.images.choose(m.chat.id)
-            b = self.rt.images.choose(m.chat.id)
-            if not a or not b or a.message_id == b.message_id:
+        if action in {
+            Action.IMAGE_MASHUP,
+            Action.COLLAGE,
+        }:
+            a = self.rt.images.choose(
+                m.chat.id
+            )
+
+            b = self.rt.images.choose(
+                m.chat.id
+            )
+
+            if (
+                not a
+                or not b
+                or a.message_id == b.message_id
+            ):
                 return
+
             try:
-                raw_a = self.bot.download_file(self.bot.get_file(a.telegram_file_id).file_path)
-                raw_b = self.bot.download_file(self.bot.get_file(b.telegram_file_id).file_path)
-                out = side_by_side(raw_a, raw_b) if action == Action.IMAGE_MASHUP else collage([raw_a, raw_b])
-                self.bot.send_photo(m.chat.id, out, reply_to_message_id=reply_id)
+                raw_a = self.bot.download_file(
+                    self.bot.get_file(
+                        a.telegram_file_id
+                    ).file_path
+                )
+
+                raw_b = self.bot.download_file(
+                    self.bot.get_file(
+                        b.telegram_file_id
+                    ).file_path
+                )
+
+                out = (
+                    side_by_side(raw_a, raw_b)
+                    if action == Action.IMAGE_MASHUP
+                    else collage([raw_a, raw_b])
+                )
+
+                self.bot.send_photo(
+                    m.chat.id,
+                    out,
+                    reply_to_message_id=reply_id,
+                )
+
             except Exception:
-                log.exception("mashup failed")
+                log.exception(
+                    "mashup failed"
+                )
+
             return
 
         if action == Action.REACTION:
             try:
-                emoji = random.choice(["👍", "😂", "❤️", "🔥", "👀"])
-                if hasattr(self.bot, "set_message_reaction"):
+                emoji = random.choice(
+                    [
+                        "👍",
+                        "😹",
+                        "❤️",
+                        "🔥",
+                        "👀",
+                    ]
+                )
+
+                if hasattr(
+                    self.bot,
+                    "set_message_reaction",
+                ):
                     from telebot.types import ReactionTypeEmoji
 
-                    self.bot.set_message_reaction(m.chat.id, reply_id, [ReactionTypeEmoji(emoji=emoji)])
+                    self.bot.set_message_reaction(
+                        m.chat.id,
+                        reply_id,
+                        [
+                            ReactionTypeEmoji(
+                                emoji=emoji
+                            )
+                        ],
+                    )
                 else:
-                    self.bot.reply_to(m, emoji)
+                    self.bot.reply_to(
+                        m,
+                        emoji,
+                    )
+
             except Exception:
-                log.exception("reaction failed")
+                log.exception(
+                    "reaction failed"
+                )
+
             return
 
         if action == Action.POLL:
             try:
-                question = self.rt.ai.generate_text(response_prompt(context, lang, p, "POLL")) or "which one"
-                self.bot.send_poll(m.chat.id, question[:300], ["yes", "no", "idk"], is_anonymous=True)
+                question = self.rt.ai.generate_text(
+                    response_prompt(
+                        context,
+                        lang,
+                        p,
+                        "POLL",
+                    )
+                ) or "which one"
+
+                self.bot.send_poll(
+                    m.chat.id,
+                    question[:300],
+                    [
+                        "yes",
+                        "no",
+                        "idk",
+                    ],
+                    is_anonymous=True,
+                )
+
             except Exception:
-                log.exception("poll failed")
+                log.exception(
+                    "poll failed"
+                )
+
             return
