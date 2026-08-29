@@ -52,10 +52,6 @@ _SECRET_PATTERNS = [
 # =========================================================
 # SENSITIVE CONTENT
 # =========================================================
-#
-# This is for privacy/data-minimization.
-# It is NOT intended to bypass provider safety controls.
-#
 
 _SENSITIVE_PATTERNS = [
     re.compile(
@@ -297,71 +293,4 @@ class PrivacyFilter:
         )
 
         return (
-            "keywords: "
-            + " ".join(chosen)
-        )
-
-    # -----------------------------------------------------
-    # ANONYMIZED SPEAKER
-    # -----------------------------------------------------
-
-    @staticmethod
-    def anonymized_speaker(
-        user_id: int,
-    ) -> str:
-
-        digest = hashlib.sha256(
-            str(user_id).encode()
-        ).hexdigest()[:6]
-
-        return (
-            f"User-{digest}"
-        )
-
-
-# =========================================================
-# MODULE-LEVEL COMPATIBILITY HELPERS
-# =========================================================
-
-def sanitize_for_ai(
-    text: str,
-) -> str:
-    """
-    Compatibility helper.
-
-    Allows existing code to use:
-
-        from app.ai.privacy import sanitize_for_ai
-    """
-
-    return PrivacyFilter.sanitize_for_ai(
-        text
-    )
-
-
-def non_verbatim(
-    text: str,
-    max_terms: int = 4,
-    seed: int | None = None,
-) -> str:
-    """
-    Module-level compatibility wrapper.
-    """
-
-    return PrivacyFilter.non_verbatim(
-        text,
-        max_terms=max_terms,
-        seed=seed,
-    )
-
-
-def is_sensitive(
-    text: str,
-) -> bool:
-    """
-    Module-level compatibility wrapper.
-    """
-
-    return PrivacyFilter.is_sensitive(
-        text
-    )
+            "
