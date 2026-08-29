@@ -32,27 +32,30 @@ def menu():
  from telebot import types
  k=types.InlineKeyboardMarkup(row_width=2)
  for a,b in [('🎯 Choose chat','mad:chats'),('📨 Send anything','mad:send'),('⚡ Random','mad:random'),('🧪 Remix','mad:remix'),('🗳 Poll','mad:poll'),('⭐ Tip','mad:tip'),('🎭 Mood','mad:mood'),('📊 Status','mad:status')]:k.add(types.InlineKeyboardButton(a,callback_data=b))
+ k.add(types.InlineKeyboardButton('⬅️ GOD PANEL','mad:god'))
  k.add(types.InlineKeyboardButton('🛑 Disable','mad:disable'));return k
 def group_menu(gs):
  from telebot import types
  k=types.InlineKeyboardMarkup(row_width=1)
  for g in gs:k.add(types.InlineKeyboardButton(f"🎯 {g['chat_id']} · {g['messages']} msgs",callback_data=f"mad:select:{g['chat_id']}"))
- k.add(types.InlineKeyboardButton('⬅️ Back',callback_data='mad:menu'));return k
+ k.add(types.InlineKeyboardButton('⬅️ GOD PANEL','mad:god'));return k
 def register(bot,runtime):
- @bot.message_handler(commands=['mad','madadmin','chaosadmin'])
- def mad(m):
-  if owner(m):bot.send_message(m.chat.id,'🧪 MERVA LAB\n\n🎯 اختار كروب ومن بعد random / remix / poll / tip / media / mood.',reply_markup=menu())
  @bot.callback_query_handler(func=lambda c:bool(c.data) and c.data.startswith('mad:'))
  def cb(c):
   if getattr(c,'from_user',None).id!=ADMIN_ID or getattr(c.message.chat,'type',None)!='private':return bot.answer_callback_query(c.id,'not authorized',show_alert=True)
   d=c.data;t=target(runtime.db)
-  if d=='mad:menu':bot.edit_message_text('🧪 MERVA LAB',c.message.chat.id,c.message.message_id,reply_markup=menu());return
+  if d=='mad:open':
+   bot.edit_message_text('🧪 MERVA LAB\n\n🎯 اختار الكروب ومن بعد نفّذ أي تجربة.',c.message.chat.id,c.message.message_id,reply_markup=menu());return
+  if d=='mad:god':
+   from app.telegram.memory_admin import menu as god_menu
+   bot.edit_message_text('🔐 GOD PANEL\n\nكل أدوات الإدارة والتخصيص في مكان واحد.',c.message.chat.id,c.message.message_id,reply_markup=god_menu());return
   if d=='mad:chats':bot.edit_message_text('🎯 اختار الكروب:',c.message.chat.id,c.message.message_id,reply_markup=group_menu(groups(runtime.db)));return
   if d.startswith('mad:select:'):save(runtime.db,chaos_target_chat_id=int(d.split(':')[-1]),mad_waiting=False);bot.edit_message_text('🎯 Selected. Actions غادي يخدمو هنا.',c.message.chat.id,c.message.message_id,reply_markup=menu());return
   if not t:return bot.answer_callback_query(c.id,'اختار كروب أولاً',show_alert=True)
   msgs=runtime.db.recent_messages(t,120)
   try:
    if d=='mad:send':save(runtime.db,mad_waiting=True);bot.send_message(c.message.chat.id,'📨 صيفط دابا أي حاجة: نص، صورة، فيديو، sticker، GIF، voice، document...');return
+   if not msgs:return bot.answer_callback_query(c.id,'مازال ما كايناش رسائل محفوظة لهاد الكروب',show_alert=True)
    if d=='mad:random':bot.copy_message(t,t,random.choice(msgs).message_id)
    elif d=='mad:remix':bot.send_message(t,mix(msgs))
    elif d=='mad:tip':bot.send_message(t,mix(msgs)+f'\n\n⭐ tip: {random.randint(1,1000)} stars')
