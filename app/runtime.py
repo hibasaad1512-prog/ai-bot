@@ -32,7 +32,7 @@ class Runtime:
             settings.image_pool_ttl_seconds
         )
 
-        self.ai = GroqProvider()
+        self.ai = GroqProvider(self.db)
         self.chaos = ChaosEngine()
 
         self.games = GameEngine(
