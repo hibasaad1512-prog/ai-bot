@@ -9,6 +9,7 @@ from app.config import settings
 from app.runtime import Runtime
 from app.telegram.commands import install_commands
 from app.telegram.handlers import TelegramHandlers
+from app.telegram.chaos_admin import register as register_chaos_admin
 from app.memory.handlers import MemoryHandlers
 from app.worker.scheduler import ProactiveScheduler
 
@@ -34,6 +35,9 @@ class KyoosBot:
             self.runtime,
             self.handlers,
         )
+        # Private owner-only lab: choose a known group and send controlled random
+        # experiments there using content already seen by the bot.
+        register_chaos_admin(self.bot, self.runtime)
 
         try:
             me = self.bot.get_me()
