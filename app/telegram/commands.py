@@ -2,8 +2,9 @@ from __future__ import annotations
 from telebot.types import BotCommand
 
 COMMANDS = [
-    BotCommand("start", "Start lmyrfawy"),
+    BotCommand("start", "Start KYOOS"),
     BotCommand("settings", "Group settings (admins)"),
+    BotCommand("testai", "Test Groq AI"),
 ]
 
 def install_commands(bot) -> None:

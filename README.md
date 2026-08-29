@@ -1,6 +1,6 @@
-# Lmyrfawya AI
+# KYOOS — CHAOS AI
 
-lmyrfawya (kyoos) is a Telegram bot designed to feel like a casual, social, slightly chaotic member. `/start`, `/settings` and `/testai` are local commands; every other non-command text message is sent directly to Groq for a reply.
+Kyoos is a Telegram bot designed to feel like a casual, social, slightly chaotic member. `/start`, `/settings` and `/testai` are local commands; every other non-command text message is sent directly to Groq for a reply.
 
 ## Core behavior
 
