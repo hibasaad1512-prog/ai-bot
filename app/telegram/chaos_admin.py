@@ -20,12 +20,12 @@ def groups(db):
  return [{'chat_id':int(x['chat_id']),'messages':int(x['messages'])} for x in rows]
 def toks(msgs):
  out=[]
- for m in msgs:out+=re.findall(r'[^\s]{2,24}',getattr(m,'text','') or '')
+ for m in msgs:out+=re.findall(r'[^\s]{1,24}',getattr(m,'text','') or '')
  return [x for x in out if not x.startswith(('/', 'http://','https://'))]
 def menu():
  from telebot import types
  k=types.InlineKeyboardMarkup(row_width=2)
- items=[('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط','mad:remix'),('🗳️ استطلاع','mad:poll'),('💳 Payment','mad:payment'),('🎭 مود','mad:mood'),('🖼️ وسائط','mad:media'),('📊 الحالة','mad:status'),('⚙️ Auto','mad:auto'),('🔥 Auto+','mad:autoplus')]
+ items=[('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط','mad:remix'),('🗳️ استطلاع عشوائي','mad:poll'),('💳 Payment','mad:payment'),('🎭 مود','mad:mood'),('🖼️ وسائط عشوائية','mad:media'),('📊 الحالة','mad:status'),('⚙️ Auto Send','mad:auto'),('🔥 Auto+','mad:autoplus'),('⚙️ تخصيص العشوائية','mad:custom')]
  for a,b in items:k.add(types.InlineKeyboardButton(a,callback_data=b))
  k.add(types.InlineKeyboardButton('🚪 خروج من المختبر',callback_data='mad:exit'));return k
 def group_menu(gs):
@@ -56,10 +56,12 @@ def register(bot,runtime):
    if d=='mad:auto':
     enabled=not bool(state(runtime.db).get('mad_auto'));save(runtime.db,mad_auto=enabled);bot.send_message(c.message.chat.id,('🤖 Auto Send: ON\n💾 محفوظ في Neon ويستأنف بعد Restart.' if enabled else '🛑 Auto Send: OFF'),reply_markup=menu());return
    if d=='mad:autoplus':
-    enabled=not bool(state(runtime.db).get('mad_autoplus'));save(runtime.db,mad_autoplus=enabled,mad_auto=enabled);bot.send_message(c.message.chat.id,('🔥 Auto+ ON\n💾 محفوظ في Neon.' if enabled else '🛑 Auto+ OFF'),reply_markup=menu());return
+    enabled=not bool(state(runtime.db).get('mad_autoplus'));save(runtime.db,mad_autoplus=enabled,mad_auto=enabled);bot.send_message(c.message.chat.id,('🔥 Auto+ ON\n🎲 AI/عشوائي/وسائط بشكل متنوع\n💾 محفوظ في Neon.' if enabled else '🛑 Auto+ OFF'),reply_markup=menu());return
+   if d=='mad:custom':
+    s=state(runtime.db);mode=s.get('mad_mode','mix');modes={'mix':'🎲 MIX: عشوائي + AI','random':'🎲 RANDOM: عشوائي فقط','ai':'🤖 AI: AI فقط'};new={'mix':'random','random':'ai','ai':'mix'}[mode];save(runtime.db,mad_mode=new);bot.send_message(c.message.chat.id,'⚙️ وضع الرد: '+modes[new],reply_markup=menu());return
    t=target(runtime.db)
    if not t:return bot.send_message(c.message.chat.id,'🎯 اختار كروبًا أولًا.')
-   msgs=runtime.db.recent_messages(t,200)
+   msgs=runtime.db.recent_messages(t,250)
    if d=='mad:send':save(runtime.db,mad_waiting='send');return bot.send_message(c.message.chat.id,'📨 أرسل الآن أي محتوى: نص، صورة، فيديو، Sticker، GIF أو ملف.')
    if d=='mad:random' and msgs:bot.copy_message(t,t,random.choice(msgs).message_id)
    elif d=='mad:remix':
@@ -68,17 +70,19 @@ def register(bot,runtime):
     from telebot import types
     amount=random.choice([10,25,50,100,250]);k=types.InlineKeyboardMarkup();k.add(types.InlineKeyboardButton(f'⭐ {amount} Stars',callback_data=f'mad:pay:{amount}'));bot.send_message(t,random.choice(['✨ اختيار عشوائي','🎁 افتح الاختيار','🪙 خيار اليوم','🎟️ جرّب هذا الاختيار']),reply_markup=k)
    elif d.startswith('mad:pay:'):
-    amount=int(d.split(':')[-1]);bot.send_invoice(t,'Merva item','Digital item',f'merva_item_{amount}','XTR', [types.LabeledPrice('Merva item',amount)])
-   elif d=='mad:mood':bot.send_message(t,random.choice(['3:','المود اليوم غريب شوية','صافي خليوها على الله','سلام لاباس؟ صافي مزيان']))
+    from telebot import types
+    amount=int(d.split(':')[-1]);bot.send_invoice(t,'Merva item','Digital item',f'merva_item_{amount}','XTR',[types.LabeledPrice('Merva item',amount)])
+   elif d=='mad:mood':bot.send_message(t,random.choice(['3:','المود اليوم غريب شوية','صافي خليوها على الله','سلام لاباس؟ صافي مزيان','واش؟','مزيان هادي']))
    elif d=='mad:media':
     media=[m for m in msgs if getattr(m,'media_type',None)]
     if media:bot.copy_message(t,t,random.choice(media).message_id)
     else:return bot.send_message(c.message.chat.id,'🖼️ لا توجد وسائط محفوظة.')
    elif d=='mad:poll':
-    words=list(dict.fromkeys(toks(msgs)));n=random.randint(3,min(8,len(words))) if len(words)>=3 else 0
-    if n:bot.send_poll(t,random.choice(['شنو كلمة اليوم؟','شنو أكثر حاجة عشوائية؟','اختار بلا تفكير 😂']),random.sample(words,n),is_anonymous=True)
+    words=list(dict.fromkeys(toks(msgs)));words=[w[:100] for w in words if w]
+    n=random.randint(3,min(10,len(words))) if len(words)>=3 else 0
+    if n:bot.send_poll(t,' '.join(random.sample(words,min(random.randint(1,5),len(words)))),random.sample(words,n),is_anonymous=True)
     else:return bot.send_message(c.message.chat.id,'🗳️ الكلمات غير كافية.')
-   elif d=='mad:status':bot.send_message(c.message.chat.id,f'🧪 الحالة\n🎯 {t}\n💬 {len(msgs)} رسالة\n🤖 Auto: {"ON" if state(runtime.db).get("mad_auto") else "OFF"}',reply_markup=menu());return
+   elif d=='mad:status':bot.send_message(c.message.chat.id,f'🧪 الحالة\n🎯 {t}\n💬 {len(msgs)} رسالة\n🎲 Mode: {state(runtime.db).get("mad_mode","mix")}\n🤖 Auto: {"ON" if state(runtime.db).get("mad_auto") else "OFF"}',reply_markup=menu());return
    else:return bot.send_message(c.message.chat.id,'⚠️ الأمر غير معروف.',reply_markup=menu())
   except Exception:
    logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d);bot.send_message(c.message.chat.id,'❌ Merva Lab error. Check Render logs.')
