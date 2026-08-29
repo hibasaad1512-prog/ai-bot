@@ -53,9 +53,12 @@ class KyoosBot:
                 return
             self.bot.send_message(message.chat.id, "🔐 GOD PANEL\n\nAll admin and automation controls are here.", reply_markup=god_menu())
 
+        # Register the private owner lab BEFORE generic AI/message handlers.
+        # Otherwise a normal text/photo sent while the lab is waiting can be
+        # consumed by the generic handler and never reach lab_input().
+        register_chaos_admin(self.bot, self.runtime)
         self.handlers = TelegramHandlers(self.bot, self.runtime)
         self.memory_handlers = MemoryHandlers(self.bot, self.runtime, self.handlers)
-        register_chaos_admin(self.bot, self.runtime)
         self.media_automation = MediaAutomation(self.bot, self.runtime)
         self.media_automation.start()
 
@@ -81,7 +84,6 @@ class KyoosBot:
             if current == url:
                 log.info("telegram webhook already configured: url=%s pending=%s last_error=%s", url, getattr(info, "pending_update_count", 0), getattr(info, "last_error_message", "") or "none")
                 return
-            # Only change the webhook when the destination actually differs.
             for attempt in range(3):
                 try:
                     self.bot.set_webhook(url=url, secret_token=settings.webhook_secret or None)
