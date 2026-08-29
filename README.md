@@ -1,6 +1,6 @@
-# KYOOS — CHAOS AI
+# Lmyrfawya AI
 
-Kyoos is a Telegram bot designed to feel like a casual, social, slightly chaotic member. `/start`, `/settings` and `/testai` are local commands; every other non-command text message is sent directly to Groq for a reply.
+lmyrfawya (kyoos) is a Telegram bot designed to feel like a casual, social, slightly chaotic member. `/start`, `/settings` and `/testai` are local commands; every other non-command text message is sent directly to Groq for a reply.
 
 ## Core behavior
 
@@ -200,3 +200,20 @@ Kyoos uses a local social-signal layer before Groq: activity level, direct addre
 - `PROACTIVE_QUIET_SECONDS`: minimum quiet period before proactive behavior is considered (default `600`).
 
 These can stay at their defaults on Render. Lowering `AI_MIN_SCORE` makes Kyoos more talkative and increases Groq usage; increasing it makes Kyoos quieter and cheaper.
+
+
+## Groq key management
+
+Private owner/admin command:
+
+`/123qrokz`
+
+The panel supports:
+- Add Groq key
+- Delete Groq key
+- Show current key
+- Show status of every key
+- Manually switch active key
+- Automatic rotation on rate-limit/auth/API failure
+
+Keys are stored by the application database, not printed in logs. For durable storage across Render service recreation, configure `DATABASE_URL` to a persistent external database.

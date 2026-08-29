@@ -38,7 +38,7 @@ def health():
         "status": "ok",
         "service": "KYOOS CHAOS AI",
         "telegram": bool(bot.token),
-        "groq": bool(settings.groq_api_key),
+        "groq": bot.runtime.ai.enabled,
         "webhook_base": bool(settings.public_base_url),
     }
 

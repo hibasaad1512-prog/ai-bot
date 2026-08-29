@@ -2,7 +2,7 @@ from __future__ import annotations
 import random, re
 from app.chaos.personality import Personality
 
-EMOJIS = ["😭", "💀", "😂", "👀", "🤨", "nah", "lol"]
+EMOJIS = ["😭", "💀", "😹", "👀", "😺", "nah", "lol"]
 
 
 def humanize(text: str, personality: Personality, style: dict) -> str:
@@ -21,6 +21,6 @@ def humanize(text: str, personality: Personality, style: dict) -> str:
     if random.random() < imp * 0.08 and len(text.split()) >= 6:
         parts = text.split()
         text = " ".join(parts[:-1])
-    if random.random() < (personality.emoji / 100) * 0.22 and not re.search(r"[😭💀😂👀🤨]", text):
+    if random.random() < (personality.emoji / 100) * 0.22 and not re.search(r"[😭💀😹👀😺]", text):
         text = f"{text} {random.choice(EMOJIS[:5])}"
     return text[:600].strip()

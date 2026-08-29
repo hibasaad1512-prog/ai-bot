@@ -2,6 +2,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from app.models import ChatMessage
+from app.ai.privacy import sanitize_for_ai, anonymized_speaker
 
 class ContextStore:
     def __init__(self,maxlen:int=40,ttl:float=7200): self.maxlen=maxlen; self.ttl=ttl; self._data:dict[int,deque[ChatMessage]]={}
@@ -19,8 +20,16 @@ class ContextStore:
         now=time.time(); rows=[]
         for m in self.recent(chat_id,limit):
             if not m.text: continue
+            safe = sanitize_for_ai(m.text)
             age=max(0,int(now-m.timestamp))
             reply=f" reply_to={m.reply_to_message_id}" if m.reply_to_message_id else ""
             media=f" media={m.media_type}" if m.media_type else ""
-            rows.append(f"[{m.message_id} age={age}s{reply}{media}] {m.display_name}: {m.text[:500]}")
+            speaker = self._speaker(m)
+            rows.append(f"[{m.message_id} age={age}s{reply}{media}] {speaker}: {safe.text}")
         return "\n".join(rows)
+
+    @staticmethod
+    def _speaker(m: ChatMessage) -> str:
+        if m.is_bot:
+            return "lmyrfawya"
+        return anonymized_speaker(m.user_id)

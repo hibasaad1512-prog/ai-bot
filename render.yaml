@@ -10,8 +10,6 @@ services:
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
-      - key: GROQ_API_KEY
-        sync: false
       - key: WEBHOOK_SECRET
         generateValue: true
       - key: PORT
@@ -25,7 +23,7 @@ services:
       - key: ENABLED_GAMES
         value: "true"
       - key: ENABLED_PROACTIVE
-        value: "false"
+        value: "true"
       - key: AI_MIN_SCORE
         value: "34"
       - key: CALLBACK_MIN_AGE_SECONDS
