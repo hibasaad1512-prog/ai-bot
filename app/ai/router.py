@@ -6,14 +6,7 @@ from .base import AIProvider
 from .groq import GroqProvider
 from .gemini import GeminiProvider
 log=logging.getLogger(__name__)
-
-SPECS={
- 'openai':('OPENAI_BASE_URL','OPENAI_MODEL','https://api.openai.com/v1','gpt-4o-mini'),
- 'deepseek':('DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','https://api.deepseek.com/v1','deepseek-chat'),
- 'openrouter':('OPENROUTER_BASE_URL','OPENROUTER_MODEL','https://openrouter.ai/api/v1','openai/gpt-4o-mini'),
- 'together':('TOGETHER_BASE_URL','TOGETHER_MODEL','https://api.together.xyz/v1','meta-llama/Llama-3.3-70B-Instruct-Turbo'),
-}
-
+SPECS={'openai':('OPENAI_BASE_URL','OPENAI_MODEL','https://api.openai.com/v1','gpt-4o-mini'),'deepseek':('DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','https://api.deepseek.com/v1','deepseek-chat'),'openrouter':('OPENROUTER_BASE_URL','OPENROUTER_MODEL','https://openrouter.ai/api/v1','openai/gpt-4o-mini'),'together':('TOGETHER_BASE_URL','TOGETHER_MODEL','https://api.together.xyz/v1','meta-llama/Llama-3.3-70B-Instruct-Turbo')}
 class OpenAICompatibleProvider(AIProvider):
     def __init__(self,name,api_key,base_url,model): self.name=name; self.api_key=api_key.strip(); self.base_url=base_url.rstrip('/'); self.model=model
     @property
@@ -26,31 +19,23 @@ class OpenAICompatibleProvider(AIProvider):
     def generate_structured(self,prompt,schema,system=None): return json.loads(self._request(self._messages(prompt,system),temperature=0,response_format={'type':'json_object'})['choices'][0]['message'].get('content','{}'))
     def analyze_image(self,image_bytes,prompt): raise RuntimeError(f'{self.name} image analysis is not configured')
     def generate_image(self,prompt): return None
-
 class MultiProvider(AIProvider):
-    def __init__(self,db):
-        self.db=db; self.groq=GroqProvider(db); self.providers={}; self.order=[]; self.refresh()
+    def __init__(self,db): self.db=db; self.groq=GroqProvider(db); self.providers={}; self.order=[]; self.refresh()
     def _state(self):
         try:return self.db.get_json('chat_settings','chat_id',0,{})
         except:return {}
-    def _keys(self):
-        try:return self._state().get('ai_keys',{})
-        except:return {}
+    def _keys(self): return self._state().get('ai_keys',{})
     def refresh(self):
         self.providers={'groq':self.groq}; self.order=[]; saved=self._keys()
         for name,(base_env,model_env,base_default,model_default) in SPECS.items():
-            keys=list(saved.get(name,[]))
-            env=os.getenv(name.upper()+'_API_KEY','').strip()
+            keys=list(saved.get(name,[])); env=os.getenv(name.upper()+'_API_KEY','').strip()
             if env and env not in keys: keys.append(env)
             for i,key in enumerate(keys): self.providers[f'{name}:{i+1}']=OpenAICompatibleProvider(name,key,os.getenv(base_env,base_default),os.getenv(model_env,model_default))
         gkeys=list(saved.get('gemini',[])); envg=os.getenv('GEMINI_API_KEY','').strip()
         if envg and envg not in gkeys:gkeys.append(envg)
         for i,key in enumerate(gkeys): self.providers[f'gemini:{i+1}']=GeminiProvider(key)
-        configured=os.getenv('AI_PROVIDER_ORDER','groq,gemini,openai,deepseek,openrouter,together')
-        bases=[x.strip().lower() for x in configured.split(',') if x.strip()]
-        for base in bases:
-            if base=='groq': self.order.append('groq')
-            else:self.order += [k for k in self.providers if k.startswith(base+':')]
+        bases=[x.strip().lower() for x in os.getenv('AI_PROVIDER_ORDER','groq,gemini,openai,deepseek,openrouter,together').split(',') if x.strip()]
+        for base in bases: self.order.append('groq') if base=='groq' else self.order.extend([k for k in self.providers if k.startswith(base+':')])
         for k in self.providers:
             if k not in self.order:self.order.append(k)
     @property
@@ -65,7 +50,7 @@ class MultiProvider(AIProvider):
     def add_key(self,key): return self.groq.add_key(key)
     def delete_key(self,index): return self.groq.delete_key(index)
     def provider_names(self): return ['groq','gemini','openai','deepseek','openrouter','together']
-    def provider_keys(self,provider): return list(self._keys().get(provider,[]))
+    def provider_keys(self,provider): return list(self.groq.keys) if provider=='groq' else list(self._keys().get(provider,[]))
     def add_provider_key(self,provider,key):
         provider=provider.lower().strip(); key=key.strip()
         if provider not in self.provider_names() or not key:return False,'invalid'
