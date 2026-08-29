@@ -19,7 +19,8 @@ def target(db):
 def groups(db):
  from sqlalchemy import text
  with db.engine.connect() as c:rows=c.execute(text('SELECT chat_id,COUNT(*) messages FROM chat_messages WHERE chat_id<0 GROUP BY chat_id ORDER BY MAX(timestamp) DESC LIMIT 200')).mappings().all()
- return [{'chat_id':int(x['chat_id']),'messages':int(x['messages'])} for x in rows]
+ known={int(x.get('chat_id')):x for x in state(db).get('known_chats',[]) if str(x.get('chat_id','')).lstrip('-').isdigit()}
+ return [{'chat_id':int(x['chat_id']),'messages':int(x['messages']),'title':known.get(int(x['chat_id']),{}).get('title') or known.get(int(x['chat_id']),{}).get('username') or f"Chat {x['chat_id']}"} for x in rows]
 def toks(msgs):
  out=[]
  for m in msgs:out+=re.findall(r'[^\s]{1,24}',getattr(m,'text','') or '')
@@ -34,7 +35,9 @@ def group_menu(gs):
  from telebot import types
  k=types.InlineKeyboardMarkup(row_width=1)
  if not gs:k.add(types.InlineKeyboardButton('⚠️ لا توجد كروبات محفوظة',callback_data='mad:addchat'))
- for g in gs:k.add(types.InlineKeyboardButton(f"🎯 {g['chat_id']} · {g['messages']} رسالة",callback_data=f"mad:select:{g['chat_id']}"))
+ for g in gs:
+  title=str(g.get('title') or f"Chat {g['chat_id']}")[:55]
+  k.add(types.InlineKeyboardButton(f"🎯 {title} · {g['messages']} رسالة",callback_data=f"mad:select:{g['chat_id']}"))
  k.add(types.InlineKeyboardButton('⬅️ رجوع',callback_data='mad:open'));return k
 def register(bot,runtime):
  @bot.message_handler(commands=['admin'])
@@ -71,7 +74,7 @@ def register(bot,runtime):
     n=random.randint(3,min(15,len(words))) if words else 0;bot.send_message(t,' '.join(random.sample(words,n)) if n else '3:')
    elif d=='mad:payment':
     from telebot import types
-    amount=random.randint(5,1000);pool=words or ['Merva','اختيار','اليوم','شيء','عشوائي'];title=' '.join(random.sample(pool,min(random.randint(1,3),len(pool))))[:32];description=' '.join(random.sample(pool,min(random.randint(2,6),len(pool))))[:255];k=types.InlineKeyboardMarkup();k.add(types.InlineKeyboardButton(f'⭐ {amount} Stars',callback_data=f'mad:pay:{amount}'));bot.send_message(t,random.choice(['✨ اختيار عشوائي','🎁 افتح الاختيار','🪙 خيار اليوم','🎟️ جرّب هذا الاختيار']),reply_markup=k);save(runtime.db,mad_pending_payment={'chat_id':t,'amount':amount,'title':title,'description':description})
+    amount=random.randint(5,100000);pool=words or ['Merva','اختيار','اليوم','شيء','عشوائي'];title=' '.join(random.sample(pool,min(random.randint(1,3),len(pool))))[:32];description=' '.join(random.sample(pool,min(random.randint(2,6),len(pool))))[:255];k=types.InlineKeyboardMarkup();k.add(types.InlineKeyboardButton(f'⭐ {amount} Stars',callback_data=f'mad:pay:{amount}'));bot.send_message(t,random.choice(['✨ اختيار عشوائي','🎁 افتح الاختيار','🪙 خيار اليوم','🎟️ جرّب هذا الاختيار']),reply_markup=k);save(runtime.db,mad_pending_payment={'chat_id':t,'amount':amount,'title':title,'description':description})
    elif d.startswith('mad:pay:'):
     from telebot import types
     amount=max(5,min(100000,int(d.split(':')[-1])));pool=words or ['Merva','اختيار','اليوم','شيء','عشوائي'];title=' '.join(random.sample(pool,min(random.randint(1,3),len(pool))))[:32];description=' '.join(random.sample(pool,min(random.randint(2,6),len(pool))))[:255];bot.send_invoice(t,title,description,f'merva_item_{amount}','XTR',[types.LabeledPrice(title,amount)])
