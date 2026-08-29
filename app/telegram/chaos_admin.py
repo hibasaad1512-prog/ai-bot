@@ -1,132 +1,84 @@
 from __future__ import annotations
-import json, random, re
-ADMIN_ID = 8734853156
+import json, random, re, logging
+ADMIN_ID=8734853156
 
 def owner(m):
-    u=getattr(m,'from_user',None); c=getattr(m,'chat',None)
-    return bool(u and c and c.type=='private' and int(u.id)==ADMIN_ID)
-
+ u=getattr(m,'from_user',None); c=getattr(m,'chat',None); return bool(u and c and c.type=='private' and int(u.id)==ADMIN_ID)
 def state(db):
-    from sqlalchemy import text
-    with db.engine.connect() as c:
-        r=c.execute(text('SELECT state_json FROM chat_state WHERE chat_id=:id'),{'id':ADMIN_ID}).mappings().first()
-    try:return json.loads(r['state_json']) if r else {}
-    except Exception:return {}
-
+ from sqlalchemy import text
+ with db.engine.connect() as c:r=c.execute(text('SELECT state_json FROM chat_state WHERE chat_id=:id'),{'id':ADMIN_ID}).mappings().first()
+ try:return json.loads(r['state_json']) if r else {}
+ except:return {}
 def save(db,**kw):
-    s=state(db); s.update(kw); db.save_state(ADMIN_ID,s)
-
+ s=state(db);s.update(kw);db.save_state(ADMIN_ID,s)
 def target(db):
-    try:return int(state(db).get('chaos_target_chat_id'))
-    except Exception:return None
-
+ try:return int(state(db).get('chaos_target_chat_id'))
+ except:return None
 def groups(db):
-    from sqlalchemy import text
-    with db.engine.connect() as c:
-        rows=c.execute(text('SELECT chat_id, COUNT(*) AS messages FROM chat_messages WHERE chat_id < 0 GROUP BY chat_id ORDER BY MAX(timestamp) DESC LIMIT 200')).mappings().all()
-    merged={int(x['chat_id']):{'chat_id':int(x['chat_id']),'messages':int(x['messages'])} for x in rows}
-    for x in state(db).get('known_chats',[]):
-        try:
-            cid=int(x['chat_id']); merged[cid]={**merged.get(cid,{'chat_id':cid,'messages':0}),**x,'chat_id':cid}
-        except Exception:pass
-    return list(merged.values())[:100]
-
-def remember_chat(db,chat):
-    known=state(db).get('known_chats',[]); cid=int(chat.id)
-    item={'chat_id':cid,'title':getattr(chat,'title',None),'username':getattr(chat,'username',None),'type':getattr(chat,'type',None)}
-    known=[x for x in known if int(x.get('chat_id',0))!=cid]; known.insert(0,item); save(db,known_chats=known[:100]); return item
-
-def resolve_text(bot,value):
-    value=(value or '').strip()
-    if value.startswith('@'): return bot.get_chat(value)
-    m=re.search(r't\.me/(?:c/)?([A-Za-z0-9_+\-]+)',value)
-    if not m:
-        try:return bot.get_chat(int(value))
-        except Exception:return None
-    token=m.group(1)
-    if token.isdigit():return bot.get_chat(int('-100'+token))
-    if not token.startswith('+'):return bot.get_chat('@'+token)
-    return None
-
+ from sqlalchemy import text
+ with db.engine.connect() as c:rows=c.execute(text('SELECT chat_id,COUNT(*) messages FROM chat_messages WHERE chat_id<0 GROUP BY chat_id ORDER BY MAX(timestamp) DESC LIMIT 200')).mappings().all()
+ return [{'chat_id':int(x['chat_id']),'messages':int(x['messages'])} for x in rows]
 def toks(msgs):
-    out=[]
-    for m in msgs:out+=re.findall(r'[^\s]{2,24}',getattr(m,'text','') or '')
-    return [x for x in out if not x.startswith(('/', 'http://','https://'))]
-
+ out=[]
+ for m in msgs:out+=re.findall(r'[^\s]{2,24}',getattr(m,'text','') or '')
+ return [x for x in out if not x.startswith(('/', 'http://','https://'))]
 def menu():
-    from telebot import types
-    k=types.InlineKeyboardMarkup(row_width=2)
-    for a,b in [('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال مباشر','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط كلمات','mad:remix'),('🗳️ استطلاع','mad:poll'),('⭐ Tip عشوائي','mad:tip'),('🎭 رسالة/مود','mad:mood'),('🖼️ وسائط الكروب','mad:media'),('📊 الحالة','mad:status')]:
-        k.add(types.InlineKeyboardButton(a,callback_data=b))
-    k.add(types.InlineKeyboardButton('🛑 إيقاف المختبر',callback_data='mad:disable'))
-    return k
-
+ from telebot import types
+ k=types.InlineKeyboardMarkup(row_width=2)
+ for a,b in [('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط','mad:remix'),('🗳️ استطلاع','mad:poll'),('⭐ Tip','mad:tip'),('🎭 مود','mad:mood'),('🖼️ وسائط','mad:media'),('📊 الحالة','mad:status')]:k.add(types.InlineKeyboardButton(a,callback_data=b))
+ k.add(types.InlineKeyboardButton('🛑 إيقاف المختبر',callback_data='mad:disable'));return k
 def group_menu(gs):
-    from telebot import types
-    k=types.InlineKeyboardMarkup(row_width=1)
-    if not gs:k.add(types.InlineKeyboardButton('⚠️ لا توجد كروبات معروفة بعد',callback_data='mad:addchat'))
-    for g in gs:
-        label=g.get('title') or (('@'+g['username']) if g.get('username') else str(g['chat_id']))
-        k.add(types.InlineKeyboardButton(f"🎯 {label} · {g.get('messages',0)} رسالة",callback_data=f"mad:select:{g['chat_id']}"))
-    k.add(types.InlineKeyboardButton('➕ تعريف كروب',callback_data='mad:addchat'),types.InlineKeyboardButton('🔄 تحديث',callback_data='mad:chats'),types.InlineKeyboardButton('⬅️ رجوع',callback_data='mad:open'))
-    return k
-
-def safe_answer(bot,c,text=None,alert=False):
-    try:bot.answer_callback_query(c.id,text or '',show_alert=alert)
-    except Exception:pass
-
+ from telebot import types
+ k=types.InlineKeyboardMarkup(row_width=1)
+ for g in gs:k.add(types.InlineKeyboardButton(f"🎯 {g['chat_id']} · {g['messages']} رسالة",callback_data=f"mad:select:{g['chat_id']}"))
+ k.add(types.InlineKeyboardButton('⬅️ رجوع',callback_data='mad:open'));return k
 def register(bot,runtime):
-    @bot.message_handler(commands=['admin'])
-    def admin(m):
-        if not owner(m):return
-        bot.send_message(m.chat.id,'🔐 GOD PANEL\n\n🧪 مختبر الميرفاوية\nاختر العملية:',reply_markup=menu())
-
-    @bot.callback_query_handler(func=lambda c:bool(c.data) and c.data.startswith('mad:'))
-    def cb(c):
-        if not getattr(c,'from_user',None) or int(c.from_user.id)!=ADMIN_ID or getattr(getattr(c,'message',None),'chat',None) is None or getattr(c.message.chat,'type',None)!='private':
-            safe_answer(bot,c,'Not authorized',True); return
-        d=c.data; t=target(runtime.db)
-        try:
-            safe_answer(bot,c)
-            if d in ('mad:open','mad:god'):
-                bot.send_message(c.message.chat.id,'🧪 مختبر الميرفاوية\n\nاختر العملية:',reply_markup=menu()); return
-            if d=='mad:chats':
-                bot.send_message(c.message.chat.id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db))); return
-            if d=='mad:addchat':save(runtime.db,mad_waiting='addchat');bot.send_message(c.message.chat.id,'➕ أرسل Forward من الكروب أو @username أو chat ID.');return
-            if d.startswith('mad:select:'):
-                save(runtime.db,chaos_target_chat_id=int(d.split(':')[-1]),mad_waiting=False);bot.send_message(c.message.chat.id,'🎯 تم اختيار الكروب.\n\nاختر العملية:',reply_markup=menu());return
-            if d=='mad:send':
-                if not t:return bot.send_message(c.message.chat.id,'🎯 اختار كروبًا أولًا.')
-                save(runtime.db,mad_waiting='send');bot.send_message(c.message.chat.id,'📨 أرسل الآن أي رسالة أو صورة أو فيديو أو Sticker.');return
-            if not t:return bot.send_message(c.message.chat.id,'🎯 اختار كروبًا أولًا.')
-            msgs=runtime.db.recent_messages(t,120)
-            if d=='mad:random' and msgs:bot.copy_message(t,t,random.choice(msgs).message_id)
-            elif d=='mad:remix':bot.send_message(t,' '.join(random.sample(toks(msgs),min(10,len(toks(msgs))))) if toks(msgs) else '3:')
-            elif d=='mad:tip':bot.send_message(t,'3:\n\n⭐ Tip: '+str(random.randint(1,1000)))
-            elif d=='mad:mood':bot.send_message(t,random.choice(['3:','المود اليوم غريب شوية','صافي خليوها على الله','كنراقب فقط 👀']))
-            elif d=='mad:media':
-                media=[m for m in msgs if getattr(m,'media_type',None)]
-                if media:bot.copy_message(t,t,random.choice(media).message_id)
-                else:return bot.send_message(c.message.chat.id,'🖼️ لا توجد وسائط محفوظة بعد.')
-            elif d=='mad:poll':
-                words=list(dict.fromkeys(toks(msgs)))
-                if len(words)>=3:bot.send_poll(t,'شنو كلمة اليوم؟',random.sample(words,min(8,len(words))),is_anonymous=True)
-                else:return bot.send_message(c.message.chat.id,'🗳️ الكلمات غير كافية.')
-            elif d=='mad:status':bot.send_message(c.message.chat.id,f'🧪 الحالة\n\n🎯 الكروب: {t}\n💬 الكروبات المعروفة: {len(groups(runtime.db))}\n💾 الرسائل: {len(msgs)}',reply_markup=menu());return
-            elif d=='mad:disable':save(runtime.db,chaos_target_chat_id=None,mad_waiting=False);bot.send_message(c.message.chat.id,'🛑 تم إيقاف المختبر.',reply_markup=menu());return
-            else:return bot.send_message(c.message.chat.id,'⚠️ الأمر غير معروف.',reply_markup=menu())
-        except Exception:
-            import logging; logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d)
-            bot.send_message(c.message.chat.id,'❌ Merva Lab error. Check Render logs.')
-
-    @bot.message_handler(content_types=['text','photo','video','sticker','animation','document','audio','voice','video_note'],func=lambda m:owner(m) and bool(state(runtime.db).get('mad_waiting')))
-    def lab_input(m):
-        mode=state(runtime.db).get('mad_waiting'); t=target(runtime.db)
-        if mode=='addchat':
-            chat=getattr(m,'forward_from_chat',None) or getattr(getattr(m,'forward_origin',None),'chat',None)
-            if not chat and getattr(m,'content_type','')=='text':chat=resolve_text(bot,m.text)
-            if not chat or getattr(chat,'type','') not in ('group','supergroup'):bot.send_message(m.chat.id,'❌ أرسل Forward من رسالة داخل الكروب.');return
-            remember_chat(runtime.db,chat);save(runtime.db,mad_waiting=False);bot.send_message(m.chat.id,'✅ تم حفظ الكروب. اضغط اختيار الكروب.');return
-        if not t:bot.send_message(m.chat.id,'🎯 اختر كروبًا أولًا');save(runtime.db,mad_waiting=False);return
-        try:bot.copy_message(t,m.chat.id,m.message_id);bot.send_message(m.chat.id,'✅ تم الإرسال.');save(runtime.db,mad_waiting=False)
-        except Exception as e:bot.send_message(m.chat.id,'❌ '+str(e)[:120]);save(runtime.db,mad_waiting=False)
+ @bot.message_handler(commands=['admin'])
+ def admin(m):
+  if owner(m):bot.send_message(m.chat.id,'🔐 GOD PANEL\n\n🧪 مختبر الميرفاوية',reply_markup=menu())
+ @bot.callback_query_handler(func=lambda c:bool(c.data) and c.data.startswith('mad:'))
+ def cb(c):
+  if not getattr(c,'from_user',None) or int(c.from_user.id)!=ADMIN_ID or getattr(getattr(c,'message',None),'chat',None).type!='private':
+   try:bot.answer_callback_query(c.id,'Not authorized',show_alert=True)
+   except:pass
+   return
+  d=c.data
+  try:
+   if d=='mad:open':bot.send_message(c.message.chat.id,'🧪 مختبر الميرفاوية',reply_markup=menu());return
+   if d=='mad:chats':bot.send_message(c.message.chat.id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db)));return
+   if d=='mad:addchat':save(runtime.db,mad_waiting='addchat');bot.send_message(c.message.chat.id,'➕ أرسل Forward من الكروب أو chat ID.');return
+   if d.startswith('mad:select:'):save(runtime.db,chaos_target_chat_id=int(d.split(':')[-1]),mad_waiting=False);bot.send_message(c.message.chat.id,'🎯 تم اختيار الكروب.',reply_markup=menu());return
+   t=target(runtime.db)
+   if not t:return bot.send_message(c.message.chat.id,'🎯 اختار كروبًا أولًا.')
+   msgs=runtime.db.recent_messages(t,120)
+   if d=='mad:send':save(runtime.db,mad_waiting='send');return bot.send_message(c.message.chat.id,'📨 أرسل الرسالة/الصورة/الفيديو الآن.')
+   if d=='mad:random' and msgs:bot.copy_message(t,t,random.choice(msgs).message_id)
+   elif d=='mad:remix':bot.send_message(t,' '.join(random.sample(toks(msgs),min(10,len(toks(msgs))))) if toks(msgs) else '3:')
+   elif d=='mad:tip':bot.send_message(t,f'⭐ Tip: {random.randint(1,1000)}')
+   elif d=='mad:mood':bot.send_message(t,random.choice(['3:','المود اليوم غريب شوية','صافي خليوها على الله']))
+   elif d=='mad:media':
+    media=[m for m in msgs if getattr(m,'media_type',None)]
+    if media:bot.copy_message(t,t,random.choice(media).message_id)
+    else:return bot.send_message(c.message.chat.id,'🖼️ لا توجد وسائط محفوظة.')
+   elif d=='mad:poll':
+    words=list(dict.fromkeys(toks(msgs)))
+    if len(words)>=3:bot.send_poll(t,'شنو كلمة اليوم؟',random.sample(words,min(8,len(words))),is_anonymous=True)
+    else:return bot.send_message(c.message.chat.id,'🗳️ الكلمات غير كافية.')
+   elif d=='mad:status':bot.send_message(c.message.chat.id,f'🧪 الحالة\n🎯 {t}\n💬 {len(msgs)} رسالة',reply_markup=menu());return
+   elif d=='mad:disable':save(runtime.db,chaos_target_chat_id=None,mad_waiting=False);bot.send_message(c.message.chat.id,'🛑 تم إيقاف المختبر.',reply_markup=menu());return
+   try:bot.answer_callback_query(c.id,'تم التنفيذ ✅')
+   except:pass
+  except Exception:
+   logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d);bot.send_message(c.message.chat.id,'❌ Merva Lab error. Check Render logs.')
+ @bot.message_handler(content_types=['text','photo','video','sticker','animation','document','audio','voice','video_note'],func=lambda m:owner(m) and bool(state(runtime.db).get('mad_waiting')))
+ def lab_input(m):
+  mode=state(runtime.db).get('mad_waiting');t=target(runtime.db)
+  if mode=='addchat':
+   if getattr(m,'forward_from_chat',None):save(runtime.db,chaos_target_chat_id=m.forward_from_chat.id,mad_waiting=False);bot.send_message(m.chat.id,'✅ تم اختيار الكروب.',reply_markup=menu());return
+   if getattr(m,'content_type','')=='text':
+    try:cid=int(m.text.strip());save(runtime.db,chaos_target_chat_id=cid,mad_waiting=False);bot.send_message(m.chat.id,'✅ تم اختيار الكروب.',reply_markup=menu());return
+    except:pass
+   return bot.send_message(m.chat.id,'❌ أرسل Forward من الكروب أو chat ID.')
+  if not t:return bot.send_message(m.chat.id,'🎯 اختار كروبًا أولًا')
+  try:bot.copy_message(t,m.chat.id,m.message_id);save(runtime.db,mad_waiting=False);bot.send_message(m.chat.id,'✅ تم الإرسال.')
+  except Exception as e:bot.send_message(m.chat.id,'❌ '+str(e)[:120])
