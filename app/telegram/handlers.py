@@ -56,6 +56,9 @@ class TelegramHandlers:
         # Next proactive message per chat.
         self._next_proactive: dict[int, float] = {}
 
+        # Users currently waiting to send a Groq API key privately.
+        self._groq_waiting_add: set[int] = set()
+
         self._register()
 
     # =========================================================
@@ -130,46 +133,53 @@ class TelegramHandlers:
             )
 
         # -----------------------------------------------------
-        # SETTINGS CALLBACKS
+        # GROQ KEY MANAGEMENT
         # -----------------------------------------------------
 
-        @self.bot.message_handler(commands=["currentkeyofg"])
-        def current_key_of_g(m):
-            # Private-chat only and owner-only when OWNER_USER_ID is configured.
-            if getattr(m.chat, "type", None) != "private":
+        @self.bot.message_handler(commands=["123qrokz"])
+        def groq_manager_command(m):
+            if not self._is_groq_manager(m):
                 return
+            self._send_groq_panel(m.chat.id)
 
-            owner_id = getattr(settings, "owner_user_id", None)
-            if owner_id is not None and m.from_user and m.from_user.id != owner_id:
-                return
+        @self.bot.message_handler(
+            content_types=["text"],
+            func=self._is_waiting_for_groq_key,
+        )
+        def groq_key_input(m):
+            self._handle_groq_key_input(m)
 
-            try:
-                index = getattr(self.rt.ai, "current_key_index", None)
-                total = len(getattr(self.rt.ai, "clients", []) or [])
-
-                if index is None:
-                    # Compatibility with older provider versions.
-                    index = getattr(self.rt.ai, "current_index", 0)
-
-                if total:
-                    self.bot.send_message(
-                        m.chat.id,
-                        f"🔑 Active Groq key: #{int(index) + 1}\n📦 Total keys: {total}",
-                    )
-                else:
-                    self.bot.send_message(
-                        m.chat.id,
-                        "❌ No Groq keys are loaded.",
-                    )
-            except Exception:
-                log.exception("/currentkeyofg failed")
+        @self.bot.callback_query_handler(
+            func=lambda c: bool(c.data) and c.data.startswith("groq:"),
+        )
+        def groq_callbacks(c):
+            if not self._is_groq_manager_callback(c):
                 try:
-                    self.bot.send_message(
-                        m.chat.id,
-                        "❌ Key status unavailable.",
+                    self.bot.answer_callback_query(
+                        c.id,
+                        "not authorized",
+                        show_alert=True,
                     )
                 except Exception:
                     pass
+                return
+
+            try:
+                self._handle_groq_callback(c)
+            except Exception:
+                log.exception("Groq manager callback failed")
+                try:
+                    self.bot.answer_callback_query(
+                        c.id,
+                        "Groq manager error",
+                        show_alert=True,
+                    )
+                except Exception:
+                    pass
+
+                # -----------------------------------------------------
+        # SETTINGS CALLBACKS
+        # -----------------------------------------------------
 
         @self.bot.callback_query_handler(
             func=lambda c:
@@ -324,6 +334,373 @@ class TelegramHandlers:
                 m,
                 "joined",
             )
+
+    # =========================================================
+    # GROQ MANAGER
+    # =========================================================
+
+    def _is_groq_manager(self, message) -> bool:
+        """Only allow Groq key management in private chat."""
+        if getattr(message.chat, "type", None) != "private":
+            return False
+
+        user = getattr(message, "from_user", None)
+        if not user:
+            return False
+
+        admin_ids = getattr(
+            settings,
+            "groq_admin_ids",
+            frozenset(),
+        )
+
+        return user.id in admin_ids
+
+    def _is_groq_manager_callback(self, callback) -> bool:
+        message = getattr(callback, "message", None)
+        user = getattr(callback, "from_user", None)
+        if not message or not user:
+            return False
+
+        if getattr(message.chat, "type", None) != "private":
+            return False
+
+        admin_ids = getattr(
+            settings,
+            "groq_admin_ids",
+            frozenset(),
+        )
+
+        return user.id in admin_ids
+
+    def _is_waiting_for_groq_key(self, message) -> bool:
+        user = getattr(message, "from_user", None)
+        if not user:
+            return False
+        return (
+            getattr(message.chat, "type", None) == "private"
+            and user.id in self._groq_waiting_add
+            and self._is_groq_manager(message)
+        )
+
+    def _groq_keyboard(self):
+        from telebot import types
+
+        keyboard = types.InlineKeyboardMarkup(row_width=2)
+        keyboard.add(
+            types.InlineKeyboardButton(
+                "➕ Add Groq",
+                callback_data="groq:add",
+            ),
+            types.InlineKeyboardButton(
+                "🗑 Delete",
+                callback_data="groq:delete_menu",
+            ),
+        )
+        keyboard.add(
+            types.InlineKeyboardButton(
+                "📊 Status",
+                callback_data="groq:status",
+            ),
+            types.InlineKeyboardButton(
+                "🔑 Current",
+                callback_data="groq:current",
+            ),
+        )
+        keyboard.add(
+            types.InlineKeyboardButton(
+                "🔄 Switch",
+                callback_data="groq:switch_menu",
+            ),
+            types.InlineKeyboardButton(
+                "♻️ Refresh",
+                callback_data="groq:refresh",
+            ),
+        )
+        return keyboard
+
+    def _groq_delete_keyboard(self):
+        from telebot import types
+
+        keyboard = types.InlineKeyboardMarkup(row_width=1)
+        statuses = self.rt.ai.get_key_status()
+
+        for item in statuses:
+            index = int(item["index"])
+            active = " ⭐" if item.get("active") else ""
+            keyboard.add(
+                types.InlineKeyboardButton(
+                    f"🗑 Delete #{index + 1}{active}",
+                    callback_data=f"groq:delete:{index}",
+                )
+            )
+
+        keyboard.add(
+            types.InlineKeyboardButton(
+                "⬅️ Back",
+                callback_data="groq:menu",
+            )
+        )
+        return keyboard
+
+    def _groq_switch_keyboard(self):
+        from telebot import types
+
+        keyboard = types.InlineKeyboardMarkup(row_width=1)
+        statuses = self.rt.ai.get_key_status()
+
+        for item in statuses:
+            index = int(item["index"])
+            active = " ⭐ CURRENT" if item.get("active") else ""
+            keyboard.add(
+                types.InlineKeyboardButton(
+                    f"🔄 Use #{index + 1}{active}",
+                    callback_data=f"groq:switch:{index}",
+                )
+            )
+
+        keyboard.add(
+            types.InlineKeyboardButton(
+                "⬅️ Back",
+                callback_data="groq:menu",
+            )
+        )
+        return keyboard
+
+    def _groq_status_text(self) -> str:
+        statuses = self.rt.ai.get_key_status()
+
+        if not statuses:
+            return "🔐 GROQ STATUS\n\n❌ No Groq keys stored."
+
+        lines = [
+            "🔐 GROQ STATUS",
+            "",
+        ]
+
+        for item in statuses:
+            index = int(item["index"]) + 1
+            key = item.get("key", "")
+            status = str(item.get("status", "unknown"))
+            active = " ⭐ CURRENT" if item.get("active") else ""
+
+            if status == "ready":
+                icon = "🟢"
+            elif status == "rate_limited":
+                icon = "🟠"
+            elif status == "invalid":
+                icon = "🔴"
+            else:
+                icon = "🟡"
+
+            lines.append(f"🔑 KEY #{index}{active}")
+            lines.append(key)
+            lines.append(f"{icon} {status.upper()}")
+
+            last_error = item.get("last_error")
+            if last_error:
+                lines.append(
+                    "Error: " + str(last_error)[:180]
+                )
+
+            lines.append("")
+
+        lines.append(
+            f"📦 Total keys: {len(statuses)}"
+        )
+
+        current = self.rt.ai.current_key_number
+        lines.append(
+            f"🔄 Active: #{current}" if current else "🔄 Active: none"
+        )
+
+        return "\n".join(lines)
+
+    def _send_groq_panel(self, chat_id: int, message_id: int | None = None):
+        text = (
+            "🔐 GROQ KEY MANAGER\n\n"
+            "إدارة مفاتيح Groq من هنا فقط.\n"
+            "المفاتيح محفوظة في قاعدة بيانات البوت.\n\n"
+            + self._groq_status_text()
+        )
+
+        if message_id is None:
+            self.bot.send_message(
+                chat_id,
+                text,
+                reply_markup=self._groq_keyboard(),
+            )
+        else:
+            try:
+                self.bot.edit_message_text(
+                    text,
+                    chat_id,
+                    message_id,
+                    reply_markup=self._groq_keyboard(),
+                )
+            except Exception:
+                self.bot.send_message(
+                    chat_id,
+                    text,
+                    reply_markup=self._groq_keyboard(),
+                )
+
+    def _handle_groq_key_input(self, m):
+        user_id = m.from_user.id
+
+        if not self._is_groq_manager(m):
+            self._groq_waiting_add.discard(user_id)
+            return
+
+        api_key = (m.text or "").strip()
+
+        if not api_key or api_key.startswith("/"):
+            return
+
+        self._groq_waiting_add.discard(user_id)
+
+        ok, reason = self.rt.ai.add_key(api_key)
+
+        if ok:
+            self.bot.send_message(
+                m.chat.id,
+                "✅ Groq key added and saved permanently in the bot database.\n\n"
+                + self._groq_status_text(),
+                reply_markup=self._groq_keyboard(),
+            )
+        elif reason == "already_exists":
+            self.bot.send_message(
+                m.chat.id,
+                "⚠️ This Groq key already exists.",
+                reply_markup=self._groq_keyboard(),
+            )
+        elif reason == "invalid_format":
+            self.bot.send_message(
+                m.chat.id,
+                "❌ Invalid Groq key format. It should start with gsk_.",
+                reply_markup=self._groq_keyboard(),
+            )
+        else:
+            self.bot.send_message(
+                m.chat.id,
+                f"❌ Could not add key: {reason}",
+                reply_markup=self._groq_keyboard(),
+            )
+
+    def _handle_groq_callback(self, c):
+        action = c.data.split(":", 1)[1]
+        chat_id = c.message.chat.id
+        message_id = c.message.message_id
+
+        if action == "add":
+            self._groq_waiting_add.add(c.from_user.id)
+            self.bot.edit_message_text(
+                "🔐 Send the Groq API key now.\n\n"
+                "Send only the key in this private chat.",
+                chat_id,
+                message_id,
+            )
+            self.bot.answer_callback_query(c.id)
+            return
+
+        if action == "status":
+            self.bot.edit_message_text(
+                self._groq_status_text(),
+                chat_id,
+                message_id,
+                reply_markup=self._groq_keyboard(),
+            )
+            self.bot.answer_callback_query(c.id)
+            return
+
+        if action == "current":
+            key = self.rt.ai.current_key
+            number = self.rt.ai.current_key_number
+
+            if not key:
+                text = "❌ No active Groq key."
+            else:
+                text = (
+                    f"🔑 CURRENT GROQ KEY #{number}\n\n"
+                    f"{key}\n\n"
+                    "This key is currently selected."
+                )
+
+            self.bot.edit_message_text(
+                text,
+                chat_id,
+                message_id,
+                reply_markup=self._groq_keyboard(),
+            )
+            self.bot.answer_callback_query(c.id)
+            return
+
+        if action == "delete_menu":
+            self.bot.edit_message_text(
+                "🗑 Choose a Groq key to delete:",
+                chat_id,
+                message_id,
+                reply_markup=self._groq_delete_keyboard(),
+            )
+            self.bot.answer_callback_query(c.id)
+            return
+
+        if action.startswith("delete:"):
+            index = int(action.split(":", 1)[1])
+            ok, reason = self.rt.ai.delete_key(index)
+
+            if ok:
+                answer = "✅ Key deleted and removed from persistent storage."
+            elif reason == "invalid_index":
+                answer = "❌ Invalid key number."
+            else:
+                answer = f"❌ Delete failed: {reason}"
+
+            self.bot.answer_callback_query(c.id, answer[:200], show_alert=True)
+            self._send_groq_panel(chat_id, message_id)
+            return
+
+        if action == "switch_menu":
+            self.bot.edit_message_text(
+                "🔄 Choose the active Groq key:",
+                chat_id,
+                message_id,
+                reply_markup=self._groq_switch_keyboard(),
+            )
+            self.bot.answer_callback_query(c.id)
+            return
+
+        if action.startswith("switch:"):
+            index = int(action.split(":", 1)[1])
+
+            if self.rt.ai.switch_key(index):
+                self.bot.answer_callback_query(
+                    c.id,
+                    f"Active key: #{index + 1}",
+                    show_alert=True,
+                )
+            else:
+                self.bot.answer_callback_query(
+                    c.id,
+                    "Invalid key number.",
+                    show_alert=True,
+                )
+
+            self._send_groq_panel(
+                chat_id,
+                message_id,
+            )
+            return
+
+        if action == "refresh" or action == "menu":
+            self._send_groq_panel(
+                chat_id,
+                message_id,
+            )
+            self.bot.answer_callback_query(c.id)
+            return
+
+        self.bot.answer_callback_query(c.id)
 
     # =========================================================
     # ADMIN
