@@ -4,6 +4,8 @@ ADMIN_ID=8734853156
 
 def owner(m):
  u=getattr(m,'from_user',None); c=getattr(m,'chat',None); return bool(u and c and c.type=='private' and int(u.id)==ADMIN_ID)
+def owner_id(value):
+ u=getattr(value,'from_user',None); return bool(u and int(u.id)==ADMIN_ID)
 def state(db):
  from sqlalchemy import text
  with db.engine.connect() as c:r=c.execute(text('SELECT state_json FROM chat_state WHERE chat_id=:id'),{'id':ADMIN_ID}).mappings().first()
@@ -40,7 +42,8 @@ def register(bot,runtime):
   if owner(m):bot.send_message(m.chat.id,'🔐 GOD PANEL\n\n🧪 مختبر الميرفاوية',reply_markup=menu())
  @bot.callback_query_handler(func=lambda c:bool(c.data) and c.data.startswith('mad:'))
  def cb(c):
-  if not getattr(c,'from_user',None) or int(c.from_user.id)!=ADMIN_ID or not getattr(getattr(c,'message',None),'chat',None) or getattr(c.message.chat,'type',None)!='private':
+  # Lab controls are owner-only, even when the button was posted in a group.
+  if not owner_id(c):
    try:bot.answer_callback_query(c.id,'Not authorized',show_alert=True)
    except:pass
    return
@@ -48,21 +51,22 @@ def register(bot,runtime):
   try:
    try:bot.answer_callback_query(c.id)
    except:pass
-   if d=='mad:exit':save(runtime.db,mad_waiting=False);bot.send_message(c.message.chat.id,'🚪 خرجت من المختبر.');return
-   if d=='mad:open':bot.send_message(c.message.chat.id,'🧪 مختبر الميرفاوية',reply_markup=menu());return
-   if d=='mad:chats':bot.send_message(c.message.chat.id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db)));return
-   if d=='mad:addchat':save(runtime.db,mad_waiting='addchat');bot.send_message(c.message.chat.id,'➕ أرسل Forward من الكروب أو chat ID.');return
-   if d.startswith('mad:select:'):save(runtime.db,chaos_target_chat_id=int(d.split(':')[-1]),mad_waiting=False);bot.send_message(c.message.chat.id,'🎯 تم اختيار الكروب.',reply_markup=menu());return
+   chat_id=c.message.chat.id
+   if d=='mad:exit':save(runtime.db,mad_waiting=False);bot.send_message(chat_id,'🚪 خرجت من المختبر. Auto Send مازال مستمرًا إذا كان مفعّلًا.');return
+   if d=='mad:open':bot.send_message(chat_id,'🧪 مختبر الميرفاوية',reply_markup=menu());return
+   if d=='mad:chats':bot.send_message(chat_id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db)));return
+   if d=='mad:addchat':save(runtime.db,mad_waiting='addchat');bot.send_message(chat_id,'➕ أرسل Forward من الكروب أو chat ID.');return
+   if d.startswith('mad:select:'):save(runtime.db,chaos_target_chat_id=int(d.split(':')[-1]),mad_waiting=False);bot.send_message(chat_id,'🎯 تم اختيار الكروب.',reply_markup=menu());return
    if d=='mad:auto':
-    enabled=not bool(state(runtime.db).get('mad_auto'));save(runtime.db,mad_auto=enabled);bot.send_message(c.message.chat.id,('🤖 Auto Send: ON\n💾 محفوظ في Neon ويستأنف بعد Restart.' if enabled else '🛑 Auto Send: OFF'),reply_markup=menu());return
+    enabled=not bool(state(runtime.db).get('mad_auto'));save(runtime.db,mad_auto=enabled);bot.send_message(chat_id,('🤖 Auto Send: ON\n💾 محفوظ في Neon ويستأنف بعد Restart.' if enabled else '🛑 Auto Send: OFF'),reply_markup=menu());return
    if d=='mad:autoplus':
-    enabled=not bool(state(runtime.db).get('mad_autoplus'));save(runtime.db,mad_autoplus=enabled,mad_auto=enabled);bot.send_message(c.message.chat.id,('🔥 Auto+ ON\n🎲 AI/عشوائي/وسائط بشكل متنوع\n💾 محفوظ في Neon.' if enabled else '🛑 Auto+ OFF'),reply_markup=menu());return
+    enabled=not bool(state(runtime.db).get('mad_autoplus'));save(runtime.db,mad_autoplus=enabled,mad_auto=enabled);bot.send_message(chat_id,('🔥 Auto+ ON\n🎲 AI/عشوائي/وسائط بشكل متنوع\n💾 محفوظ في Neon.' if enabled else '🛑 Auto+ OFF'),reply_markup=menu());return
    if d=='mad:custom':
-    s=state(runtime.db);mode=s.get('mad_mode','mix');modes={'mix':'🎲 MIX: عشوائي + AI','random':'🎲 RANDOM: عشوائي فقط','ai':'🤖 AI: AI فقط'};new={'mix':'random','random':'ai','ai':'mix'}[mode];save(runtime.db,mad_mode=new);bot.send_message(c.message.chat.id,'⚙️ وضع الرد: '+modes[new],reply_markup=menu());return
+    mode=state(runtime.db).get('mad_mode','mix');modes={'mix':'🎲 MIX: عشوائي + AI','random':'🎲 RANDOM: عشوائي فقط','ai':'🤖 AI: AI فقط'};new={'mix':'random','random':'ai','ai':'mix'}[mode];save(runtime.db,mad_mode=new);bot.send_message(chat_id,'⚙️ وضع الرد: '+modes[new],reply_markup=menu());return
    t=target(runtime.db)
-   if not t:return bot.send_message(c.message.chat.id,'🎯 اختار كروبًا أولًا.')
+   if not t:return bot.send_message(chat_id,'🎯 اختار كروبًا أولًا.')
    msgs=runtime.db.recent_messages(t,250)
-   if d=='mad:send':save(runtime.db,mad_waiting='send');return bot.send_message(c.message.chat.id,'📨 أرسل الآن أي محتوى: نص، صورة، فيديو، Sticker، GIF أو ملف.')
+   if d=='mad:send':save(runtime.db,mad_waiting='send');return bot.send_message(chat_id,'📨 أرسل الآن أي محتوى: نص، صورة، فيديو، Sticker، GIF أو ملف.')
    if d=='mad:random' and msgs:bot.copy_message(t,t,random.choice(msgs).message_id)
    elif d=='mad:remix':
     words=toks(msgs);n=random.randint(3,min(15,len(words))) if words else 0;bot.send_message(t,' '.join(random.sample(words,n)) if n else '3:')
@@ -71,21 +75,33 @@ def register(bot,runtime):
     amount=random.choice([10,25,50,100,250]);k=types.InlineKeyboardMarkup();k.add(types.InlineKeyboardButton(f'⭐ {amount} Stars',callback_data=f'mad:pay:{amount}'));bot.send_message(t,random.choice(['✨ اختيار عشوائي','🎁 افتح الاختيار','🪙 خيار اليوم','🎟️ جرّب هذا الاختيار']),reply_markup=k)
    elif d.startswith('mad:pay:'):
     from telebot import types
-    amount=int(d.split(':')[-1]);bot.send_invoice(t,'Merva item','Digital item',f'merva_item_{amount}','XTR',[types.LabeledPrice('Merva item',amount)])
+    amount=max(1,min(10000,int(d.split(':')[-1])))
+    bot.send_invoice(t,'Merva purchase','Digital item',f'merva_item_{amount}','XTR',[types.LabeledPrice('Merva item',amount)])
    elif d=='mad:mood':bot.send_message(t,random.choice(['3:','المود اليوم غريب شوية','صافي خليوها على الله','سلام لاباس؟ صافي مزيان','واش؟','مزيان هادي']))
    elif d=='mad:media':
     media=[m for m in msgs if getattr(m,'media_type',None)]
     if media:bot.copy_message(t,t,random.choice(media).message_id)
-    else:return bot.send_message(c.message.chat.id,'🖼️ لا توجد وسائط محفوظة.')
+    else:return bot.send_message(chat_id,'🖼️ لا توجد وسائط محفوظة.')
    elif d=='mad:poll':
-    words=list(dict.fromkeys(toks(msgs)));words=[w[:100] for w in words if w]
-    n=random.randint(3,min(10,len(words))) if len(words)>=3 else 0
+    words=list(dict.fromkeys(toks(msgs)));n=random.randint(3,min(10,len(words))) if len(words)>=3 else 0
     if n:bot.send_poll(t,' '.join(random.sample(words,min(random.randint(1,5),len(words)))),random.sample(words,n),is_anonymous=True)
-    else:return bot.send_message(c.message.chat.id,'🗳️ الكلمات غير كافية.')
-   elif d=='mad:status':bot.send_message(c.message.chat.id,f'🧪 الحالة\n🎯 {t}\n💬 {len(msgs)} رسالة\n🎲 Mode: {state(runtime.db).get("mad_mode","mix")}\n🤖 Auto: {"ON" if state(runtime.db).get("mad_auto") else "OFF"}',reply_markup=menu());return
-   else:return bot.send_message(c.message.chat.id,'⚠️ الأمر غير معروف.',reply_markup=menu())
+    else:return bot.send_message(chat_id,'🗳️ الكلمات غير كافية.')
+   elif d=='mad:status':bot.send_message(chat_id,f'🧪 الحالة\n🎯 {t}\n💬 {len(msgs)} رسالة\n🎲 Mode: {state(runtime.db).get("mad_mode","mix")}\n🤖 Auto: {"ON" if state(runtime.db).get("mad_auto") else "OFF"}',reply_markup=menu());return
+   else:return bot.send_message(chat_id,'⚠️ الأمر غير معروف.',reply_markup=menu())
   except Exception:
-   logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d);bot.send_message(c.message.chat.id,'❌ Merva Lab error. Check Render logs.')
+   logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d);bot.send_message(chat_id,'❌ Merva Lab error. Check Render logs.')
+ @bot.pre_checkout_query_handler(func=lambda q:bool(getattr(q,'invoice_payload','')) and str(q.invoice_payload).startswith('merva_item_'))
+ def merva_precheckout(q):
+  # Telegram requires an answer within 10 seconds for Stars checkout.
+  try:bot.answer_pre_checkout_query(q.id,ok=True)
+  except Exception:logging.getLogger(__name__).exception('Merva Stars pre-checkout failed')
+ @bot.message_handler(content_types=['successful_payment'])
+ def merva_payment_received(m):
+  p=getattr(m,'successful_payment',None)
+  if not p:return
+  try:
+   save(runtime.db,last_stars_payment={'chat_id':m.chat.id,'user_id':m.from_user.id,'amount':p.total_amount,'payload':p.invoice_payload,'charge_id':p.telegram_payment_charge_id})
+  except Exception:logging.getLogger(__name__).exception('Merva Stars payment persistence failed')
  @bot.message_handler(content_types=['text','photo','video','sticker','animation','document','audio','voice','video_note'],func=lambda m:owner(m) and bool(state(runtime.db).get('mad_waiting')))
  def lab_input(m):
   mode=state(runtime.db).get('mad_waiting');t=target(runtime.db)
