@@ -8,8 +8,7 @@ COMMANDS = [
 ]
 
 OWNER_COMMANDS = [
-    BotCommand("admin", "Owner control panel"),
-    BotCommand("mad", "Private Merva Lab"),
+    BotCommand("admin", "Owner GOD PANEL"),
 ]
 
 
