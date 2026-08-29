@@ -57,7 +57,8 @@ def menu():
     from telebot import types
     k=types.InlineKeyboardMarkup(row_width=2)
     for a,b in [('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال مباشر','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط كلمات','mad:remix'),('🗳️ استطلاع','mad:poll'),('⭐ Tip عشوائي','mad:tip'),('🎭 رسالة/مود','mad:mood'),('🖼️ وسائط الكروب','mad:media'),('📊 الحالة','mad:status')]:k.add(types.InlineKeyboardButton(a,callback_data=b))
-    k.add(types.InlineKeyboardButton('⬅️ لوحة التحكم','callback_data:mad:god'),types.InlineKeyboardButton('🛑 إيقاف المختبر','callback_data:mad:disable')); return k
+    # No legacy navigation/URL button. Reopen the panel with /admin.
+    k.add(types.InlineKeyboardButton('🛑 إيقاف المختبر','callback_data=mad:disable')); return k
 
 def group_menu(gs):
     from telebot import types
@@ -111,8 +112,8 @@ def register(bot,runtime):
             elif d=='mad:status':bot.send_message(c.message.chat.id,f'🧪 الحالة\n\n🎯 الكروب: {t}\n💬 الكروبات المعروفة: {len(groups(runtime.db))}\n💾 الرسائل: {len(msgs)}',reply_markup=menu());return
             elif d=='mad:disable':save(runtime.db,chaos_target_chat_id=None,mad_waiting=False);bot.send_message(c.message.chat.id,'🛑 تم إيقاف المختبر.',reply_markup=menu());return
             else:return bot.send_message(c.message.chat.id,'⚠️ الأمر غير معروف.',reply_markup=menu())
-        except Exception as e:
-            log=__import__('logging').getLogger(__name__);log.exception('Merva Lab callback failed: %s',d)
+        except Exception:
+            import logging; logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d)
             bot.send_message(c.message.chat.id,'❌ Merva Lab error. Check Render logs.')
     @bot.message_handler(content_types=['text','photo','video','sticker','animation','document','audio','voice','video_note'],func=lambda m:owner(m) and bool(state(runtime.db).get('mad_waiting')))
     def lab_input(m):
