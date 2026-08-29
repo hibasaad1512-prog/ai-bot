@@ -42,7 +42,6 @@ def register(bot,runtime):
   if owner(m):bot.send_message(m.chat.id,'🔐 GOD PANEL\n\n🧪 مختبر الميرفاوية',reply_markup=menu())
  @bot.callback_query_handler(func=lambda c:bool(c.data) and c.data.startswith('mad:'))
  def cb(c):
-  # Lab controls are owner-only, even when the button was posted in a group.
   if not owner_id(c):
    try:bot.answer_callback_query(c.id,'Not authorized',show_alert=True)
    except:pass
@@ -88,19 +87,19 @@ def register(bot,runtime):
     else:return bot.send_message(chat_id,'🗳️ الكلمات غير كافية.')
    elif d=='mad:status':bot.send_message(chat_id,f'🧪 الحالة\n🎯 {t}\n💬 {len(msgs)} رسالة\n🎲 Mode: {state(runtime.db).get("mad_mode","mix")}\n🤖 Auto: {"ON" if state(runtime.db).get("mad_auto") else "OFF"}',reply_markup=menu());return
    else:return bot.send_message(chat_id,'⚠️ الأمر غير معروف.',reply_markup=menu())
-  except Exception:
-   logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d);bot.send_message(chat_id,'❌ Merva Lab error. Check Render logs.')
+  except Exception as exc:
+   logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d)
+   try:bot.send_message(ADMIN_ID,f'❌ Merva Lab error: {type(exc).__name__}: {str(exc)[:500]}')
+   except:pass
  @bot.pre_checkout_query_handler(func=lambda q:bool(getattr(q,'invoice_payload','')) and str(q.invoice_payload).startswith('merva_item_'))
  def merva_precheckout(q):
-  # Telegram requires an answer within 10 seconds for Stars checkout.
   try:bot.answer_pre_checkout_query(q.id,ok=True)
   except Exception:logging.getLogger(__name__).exception('Merva Stars pre-checkout failed')
  @bot.message_handler(content_types=['successful_payment'])
  def merva_payment_received(m):
   p=getattr(m,'successful_payment',None)
   if not p:return
-  try:
-   save(runtime.db,last_stars_payment={'chat_id':m.chat.id,'user_id':m.from_user.id,'amount':p.total_amount,'payload':p.invoice_payload,'charge_id':p.telegram_payment_charge_id})
+  try:save(runtime.db,last_stars_payment={'chat_id':m.chat.id,'user_id':m.from_user.id,'amount':p.total_amount,'payload':p.invoice_payload,'charge_id':p.telegram_payment_charge_id})
   except Exception:logging.getLogger(__name__).exception('Merva Stars payment persistence failed')
  @bot.message_handler(content_types=['text','photo','video','sticker','animation','document','audio','voice','video_note'],func=lambda m:owner(m) and bool(state(runtime.db).get('mad_waiting')))
  def lab_input(m):
