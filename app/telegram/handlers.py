@@ -37,35 +37,21 @@ class TelegramHandlers:
         self._groq_waiting_add: set[int] = set()
         self._register()
 
+    def _is_waiting_for_groq_key(self, m):
+        return bool(getattr(m, "from_user", None) and m.from_user.id in getattr(settings, "groq_admin_ids", frozenset({8734853156})) and m.chat.type == "private" and m.from_user.id in self._groq_waiting_add)
+
     def _register(self):
         @self.bot.message_handler(commands=["start"])
         def start(m):
             if is_group(m.chat.type):
-                # Group start stays short/natural; no AI call is needed.
                 self.bot.reply_to(m, "3:")
                 return
-
-            # Private start is informative and deterministic: explain the bot and
-            # offer Telegram's native Add-to-Group flow. It never consumes an AI key.
             kb = types.InlineKeyboardMarkup(row_width=1)
             me = self.bot.get_me()
             username = getattr(me, "username", None)
             if username:
-                kb.add(types.InlineKeyboardButton(
-                    "➕ إضافة الميرفاوية إلى كروب",
-                    url=f"https://t.me/{username}?startgroup=true",
-                ))
-            kb.add(types.InlineKeyboardButton("⚙️ إعدادات / المساعدة", callback_data="panel:help"))
-            self.bot.send_message(
-                m.chat.id,
-                "🤖 الميرفاوية\n\n"
-                "مساعد AI للمحادثات داخل الكروبات، يفهم العربية والدارجة المغربية واللغات واللهجات المتعددة، "
-                "ويقدر يتعامل مع النصوص والصور والوسائط حسب إعدادات الكروب.\n\n"
-                "🧠 نموذج الذكاء الاصطناعي يتم اختياره من النظام حسب المفاتيح والمزوّدات المتاحة، "
-                "مع إمكانية الانتقال لمزوّد آخر عند تعطل أحدها.\n\n"
-                "➕ أضفني إلى كروب وابدأ من هناك.",
-                reply_markup=kb,
-            )
+                kb.add(types.InlineKeyboardButton("➕ Add Merva to a group", url=f"https://t.me/{username}?startgroup=true"))
+            self.bot.send_message(m.chat.id, "🤖 Merva\n\nAI assistant for group chats.\n\nAdd me to a group to get started.", reply_markup=kb)
 
         @self.bot.message_handler(commands=["settings"])
         def settings_cmd(m):
@@ -73,36 +59,26 @@ class TelegramHandlers:
 
         @self.bot.message_handler(commands=["testai"])
         def testai(m):
-            if not can_use_testai(self.bot, m):
-                return
+            if not can_use_testai(self.bot, m): return
             lines = ["LMYRFAWYA AI TEST", f"Provider: Groq {'✅' if self.rt.ai.enabled else '❌'}"]
-            if not self.rt.ai.enabled:
-                lines.append("Text API: ❌ Groq client unavailable")
+            if not self.rt.ai.enabled: lines.append("Text API: ❌ Groq client unavailable")
             else:
                 try:
                     text = self.rt.ai.generate_text("Reply with exactly: ping")
                     lines.append(f"Text API: {'✅' if text.strip() else '❌'}")
-                    if text.strip() and text.strip().lower() != "ping":
-                        lines.append(f"Reply: {text[:120]}")
+                    if text.strip() and text.strip().lower() != "ping": lines.append(f"Reply: {text[:120]}")
                 except Exception as exc:
-                    log.exception("/testai failed")
-                    lines.append(f"Text API: ❌ {type(exc).__name__}: {str(exc)[:160]}")
+                    log.exception("/testai failed"); lines.append(f"Text API: ❌ {type(exc).__name__}: {str(exc)[:160]}")
             lines.append("Runtime: group AI replies only")
             self.bot.send_message(m.chat.id, "\n".join(lines))
 
-        # Existing handlers below remain unchanged in the repository version.
-        # -----------------------------------------------------
-        # GROQ KEY MANAGEMENT
-        # -----------------------------------------------------
         @self.bot.message_handler(commands=["123qrokz", "currentkeyofg"])
         def groq_manager_command(m):
-            if not self._is_groq_manager(m):
-                return
+            if not self._is_groq_manager(m): return
             self._send_groq_panel(m.chat.id)
 
         @self.bot.message_handler(content_types=["text"], func=self._is_waiting_for_groq_key)
-        def groq_key_input(m):
-            self._handle_groq_key_input(m)
+        def groq_key_input(m): self._handle_groq_key_input(m)
 
         @self.bot.callback_query_handler(func=lambda c: bool(c.data) and c.data.startswith("groq:"))
         def groq_callbacks(c):
@@ -110,8 +86,7 @@ class TelegramHandlers:
                 try: self.bot.answer_callback_query(c.id, "not authorized", show_alert=True)
                 except Exception: pass
                 return
-            try:
-                self._handle_groq_callback(c)
+            try: self._handle_groq_callback(c)
             except Exception:
                 log.exception("Groq manager callback failed")
                 try: self.bot.answer_callback_query(c.id, "Groq manager error", show_alert=True)
