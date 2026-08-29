@@ -4,7 +4,6 @@ from telebot import types
 
 from app.config import settings
 
-
 OWNER_ID = 8734853156
 
 
@@ -17,6 +16,7 @@ def is_owner(user_id: int | None) -> bool:
 def menu() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
+        types.InlineKeyboardButton("🧪 Merva Lab", callback_data="memadmin:lab"),
         types.InlineKeyboardButton("🧠 Memory", callback_data="memadmin:memory"),
         types.InlineKeyboardButton("🔑 AI Keys", callback_data="memadmin:keys"),
         types.InlineKeyboardButton("💬 Messages", callback_data="memadmin:messages"),
