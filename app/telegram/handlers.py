@@ -1,4 +1,4 @@
-دfrom __future__ import annotations
+from __future__ import annotations
 
 import logging
 import random
@@ -12,7 +12,7 @@ from app.ai.prompts import response_prompt
 from app.chaos.actions import Action
 from app.config import settings
 from app.images.collage import collage, side_by_side
-from app.images.meme import caption_meme
+from app.images.meme import caption_meme, meme_mashup
 from app.images.pool import ImageRef
 from app.models import ChatMessage
 from app.telegram.admin_panel import adjust_panel, language_panel, panel
@@ -35,17 +35,23 @@ class TelegramHandlers:
         self.rt = runtime
         self._bot_username = "الميرفاوية"
 
-        # Per-user reply tracking.
-        # {(chat_id, user_id): {"count": int, "reset_at": float}}
+        # Per-user reply counters.
         self._user_reply_limits: dict[
             tuple[int, int],
             dict[str, float | int],
         ] = {}
 
-        # Next proactive message time for each chat.
+        # Next spontaneous message for each chat.
         self._next_proactive: dict[int, float] = {}
 
+        # Last message used for a random reaction.
+        self._last_random_reaction_message: dict[int, int] = {}
+
         self._register()
+
+    # =========================================================
+    # REGISTER
+    # =========================================================
 
     def _register(self):
         @self.bot.message_handler(commands=["start"])
@@ -98,7 +104,7 @@ class TelegramHandlers:
                     )
 
             lines.append(
-                "Runtime: 80% reply chance + random callbacks + chat remix + proactive messages"
+                "Runtime: groups only + 80% reply chance + random callbacks + random reactions"
             )
 
             self.bot.send_message(
@@ -182,7 +188,6 @@ class TelegramHandlers:
                         )
 
                         setattr(p, key, value)
-
                         self.rt.save_personality(
                             chat_id,
                             p,
@@ -198,9 +203,7 @@ class TelegramHandlers:
                         )
 
             except Exception:
-                log.exception(
-                    "settings callback failed"
-                )
+                log.exception("settings callback failed")
 
             finally:
                 try:
@@ -209,7 +212,7 @@ class TelegramHandlers:
                     pass
 
         @self.bot.message_handler(
-            content_types=["text", "photo"],
+            content_types=["text", "photo", "video"],
             func=is_non_command_message,
         )
         def normal_message(m):
@@ -232,6 +235,10 @@ class TelegramHandlers:
                 "joined",
             )
 
+    # =========================================================
+    # ADMIN
+    # =========================================================
+
     def admin_command(self, m):
         if not can_use_settings(self.bot, m):
             if getattr(m.chat, "type", None) == "private":
@@ -249,6 +256,10 @@ class TelegramHandlers:
                 self.rt.get_language_mode(m.chat.id),
             ),
         )
+
+    # =========================================================
+    # MEMORY
+    # =========================================================
 
     def _remember_bot_reply(
         self,
@@ -270,7 +281,7 @@ class TelegramHandlers:
         )
 
     # =========================================================
-    # Reply controls
+    # REPLY CONTROLS
     # =========================================================
 
     def _reply_chance_passes(self) -> bool:
@@ -366,7 +377,7 @@ class TelegramHandlers:
         self._user_reply_limits[key] = state
 
     # =========================================================
-    # Random older-message callback
+    # RANDOM CALLBACK
     # =========================================================
 
     def _random_callback_context(
@@ -392,10 +403,8 @@ class TelegramHandlers:
         if not candidates:
             return "", ""
 
-        candidates = candidates[-25:]
-
         chosen = random.choice(
-            candidates
+            candidates[-25:]
         )
 
         return (
@@ -403,13 +412,13 @@ class TelegramHandlers:
             f"{chosen.display_name}: "
             f"{chosen.text[:700]}\n"
             "\n"
-            "React to this older message only if it "
-            "actually fits naturally.",
+            "React to this older message only if it naturally "
+            "fits the current conversation.",
             chosen.text[:700],
         )
 
     # =========================================================
-    # Random words / phrases remix
+    # RANDOM CHAT REMIX
     # =========================================================
 
     def _random_remix_context(
@@ -485,10 +494,10 @@ class TelegramHandlers:
             + "\n".join(pieces)
             + "\n\n"
             "You may combine some of these words or phrases "
-            "into a natural message.\n"
+            "into one natural message.\n"
             "Do not simply concatenate them.\n"
             "Do not explain where they came from.\n"
-            "Do not force the remix if it sounds unnatural."
+            "Do not force the remix."
         )
 
     def _build_reply_context(
@@ -514,7 +523,6 @@ class TelegramHandlers:
 
         mode = "DIRECT_REPLY"
 
-        # 15% random callback.
         if random.random() < 0.15:
             callback_context, _ = (
                 self._random_callback_context(
@@ -529,11 +537,10 @@ class TelegramHandlers:
                 )
                 mode = "RANDOM_CALLBACK"
 
-        # 8% random chat remix.
         if random.random() < 0.08:
             remix_context = (
                 self._random_remix_context(
-                    m.chat.id,
+                    m.chat.id
                 )
             )
 
@@ -551,14 +558,124 @@ class TelegramHandlers:
         )
 
     # =========================================================
-    # Normal messages
+    # RANDOM REACTION
+    # =========================================================
+
+    def random_reaction(self, chat_id: int) -> bool:
+        """
+        Pick a random human message from the chat
+        and react to it with a random emoji.
+
+        It does not need to be the latest message
+        and it does not need to be directed at the bot.
+        """
+
+        recent = self.rt.memory.recent(
+            chat_id,
+            50,
+        )
+
+        candidates = [
+            x
+            for x in recent
+            if (
+                x.text
+                and not x.is_bot
+            )
+        ]
+
+        if not candidates:
+            return False
+
+        # Avoid the exact same message twice in a row.
+        previous_id = self._last_random_reaction_message.get(
+            chat_id
+        )
+
+        choices = [
+            x
+            for x in candidates
+            if x.message_id != previous_id
+        ]
+
+        if not choices:
+            choices = candidates
+
+        selected = random.choice(
+            choices
+        )
+
+        self._last_random_reaction_message[chat_id] = (
+            selected.message_id
+        )
+
+        reaction_emojis = [
+            "👍",
+            "❤️",
+            "🔥",
+            "👀",
+            "😹",
+            "😮",
+            "🤔",
+            "👏",
+        ]
+
+        emoji = random.choice(
+            reaction_emojis
+        )
+
+        try:
+            if hasattr(
+                self.bot,
+                "set_message_reaction",
+            ):
+                from telebot.types import ReactionTypeEmoji
+
+                self.bot.set_message_reaction(
+                    chat_id,
+                    selected.message_id,
+                    [
+                        ReactionTypeEmoji(
+                            emoji=emoji
+                        )
+                    ],
+                )
+                return True
+
+            # Fallback if reaction API isn't available.
+            self.bot.send_message(
+                chat_id,
+                emoji,
+                reply_to_message_id=selected.message_id,
+                allow_sending_without_reply=True,
+            )
+
+            return True
+
+        except Exception:
+            log.exception(
+                "random reaction failed"
+            )
+            return False
+
+    # =========================================================
+    # NORMAL MESSAGE
     # =========================================================
 
     def on_message(self, m):
         if not m.from_user:
             return
 
-        # Never answer bots.
+        # AI interaction is GROUP ONLY.
+        # Commands remain separate and continue to work.
+        if getattr(
+            m.chat,
+            "type",
+            None,
+        ) == "private":
+            return
+
+        # Never interact with bots.
         if getattr(
             m.from_user,
             "is_bot",
@@ -571,8 +688,13 @@ class TelegramHandlers:
         image_file_id = None
         media_type = None
 
+        # -----------------------------------------------------
+        # Photo
+        # -----------------------------------------------------
+
         if m.photo:
             media_type = "photo"
+
             image_file_id = m.photo[-1].file_id
 
             self.rt.images.add(
@@ -584,6 +706,31 @@ class TelegramHandlers:
                     None,
                     m.from_user.id,
                     "photo",
+                )
+            )
+
+        # -----------------------------------------------------
+        # Video
+        # -----------------------------------------------------
+
+        if getattr(
+            m,
+            "video",
+            None,
+        ):
+            media_type = "video"
+
+            image_file_id = m.video.file_id
+
+            self.rt.images.add(
+                ImageRef(
+                    m.chat.id,
+                    m.message_id,
+                    image_file_id,
+                    time.time(),
+                    None,
+                    m.from_user.id,
+                    "video",
                 )
             )
 
@@ -608,8 +755,14 @@ class TelegramHandlers:
 
         self.rt.memory.add(cm)
 
-        # Keep moderation independent.
-        if text and settings.enabled_moderation:
+        # -----------------------------------------------------
+        # Moderation
+        # -----------------------------------------------------
+
+        if (
+            text
+            and settings.enabled_moderation
+        ):
             try:
                 mod = self.rt.moderation.detect(
                     text,
@@ -639,41 +792,38 @@ class TelegramHandlers:
                     "moderation check failed"
                 )
 
-        # Photo without caption.
-        if m.photo and not text:
+        # Media without caption:
+        # stored for future random media use.
+        if (
+            (m.photo or getattr(m, "video", None))
+            and not text
+        ):
             return
 
         if not text:
             return
 
         if not self.rt.ai.enabled:
-            self.bot.send_message(
-                m.chat.id,
-                "⚠️ AI is not configured right now",
-            )
             return
 
         user_id = m.from_user.id
 
         # -----------------------------------------------------
         # IMPORTANT:
-        # These checks happen BEFORE Groq, so ignored messages
-        # do not wait for an AI request.
+        # All skip decisions happen before Groq.
         # -----------------------------------------------------
 
-        # Same-user limit.
         if not self._can_reply_to_user(
             m.chat.id,
             user_id,
         ):
             return
 
-        # 80% reply chance.
         if not self._reply_chance_passes():
             return
 
-        # No artificial delay here.
-        # Response generation starts immediately.
+        # NO artificial sleep here.
+        # The response starts immediately.
 
         recent = self.rt.memory.recent(
             m.chat.id,
@@ -698,11 +848,12 @@ class TelegramHandlers:
         )
 
         signals = {
+            "character_name": "الميرفاوية",
+            "english_name": "lmyrfawya",
             "same_language_as_chat": True,
             "emojis_optional": True,
             "cute_but_not_cringe": True,
-            "short_spontaneous_reply": True,
-            "character_name": "الميرفاوية",
+            "short_and_natural": True,
             "random_callback_possible": True,
             "chat_remix_possible": True,
         }
@@ -769,7 +920,6 @@ class TelegramHandlers:
                 allow_sending_without_reply=True,
             )
 
-            # Count only successful replies.
             self._record_user_reply(
                 m.chat.id,
                 user_id,
@@ -790,6 +940,10 @@ class TelegramHandlers:
                 "AI reply failed"
             )
 
+    # =========================================================
+    # CLEAN REPLY
+    # =========================================================
+
     @staticmethod
     def _clean_reply(text: str) -> str:
         text = (text or "").strip()
@@ -806,11 +960,15 @@ class TelegramHandlers:
         return text[:1000]
 
     # =========================================================
-    # Proactive / spontaneous messages
+    # PROACTIVE
     # =========================================================
 
     def proactive(self, chat_id: int):
-        """Send a spontaneous message at a random time between 6 and 15 hours."""
+        """
+        Spontaneous message between 6 and 15 hours.
+
+        The runtime/scheduler must call this method periodically.
+        """
 
         if not self.rt.ai.enabled:
             return
@@ -832,7 +990,7 @@ class TelegramHandlers:
 
         now = time.time()
 
-        # First scheduling.
+        # First schedule.
         next_time = self._next_proactive.get(
             chat_id
         )
@@ -866,11 +1024,10 @@ class TelegramHandlers:
 
             return
 
-        # Not time yet.
         if now < next_time:
             return
 
-        # Schedule another random window.
+        # Set next random time.
         minimum = int(
             getattr(
                 settings,
@@ -897,7 +1054,7 @@ class TelegramHandlers:
             )
         )
 
-        # Default 100 = send when the scheduled time is reached.
+        # Default is 100%.
         chance = max(
             0,
             min(
@@ -915,11 +1072,7 @@ class TelegramHandlers:
         if random.random() * 100 >= chance:
             return
 
-        p = self.rt.personality(
-            chat_id
-        )
-
-        # Don't interrupt a currently active conversation.
+        # Do not interrupt an active chat.
         quiet_seconds = getattr(
             settings,
             "proactive_quiet_seconds",
@@ -959,7 +1112,7 @@ class TelegramHandlers:
             20,
         )
 
-        # 40% chance to use an older message.
+        # Older random callback.
         if (
             len(human_messages) >= 3
             and random.random() < 0.40
@@ -969,12 +1122,12 @@ class TelegramHandlers:
             )
 
             context += (
-                "\n\nRandom older message from the chat:\n"
+                "\n\nRandom older message:\n"
                 f"{selected.display_name}: "
                 f"{selected.text[:600]}"
             )
 
-        # 15% chance to remix random chat pieces.
+        # Random remix.
         if random.random() < 0.15:
             remix = self._random_remix_context(
                 chat_id
@@ -993,6 +1146,10 @@ class TelegramHandlers:
             ]
         )
 
+        p = self.rt.personality(
+            chat_id
+        )
+
         try:
             txt = self.rt.ai.generate_text(
                 response_prompt(
@@ -1002,15 +1159,13 @@ class TelegramHandlers:
                     "PROACTIVE",
                     signals={
                         "spontaneous": True,
-                        "same_language_as_chat": True,
-                        "may_start_new_topic": True,
-                        "random_callback_allowed": True,
-                        "chat_remix_allowed": True,
-                        "emojis_optional": True,
-                        "cute_but_not_cringe": True,
-                        "short_and_natural": True,
                         "character_name": "الميرفاوية",
                         "english_name": "lmyrfawya",
+                        "same_language_as_chat": True,
+                        "emojis_optional": True,
+                        "cute_but_not_cringe": True,
+                        "random_callback_allowed": True,
+                        "chat_remix_allowed": True,
                     },
                 )
             )
@@ -1058,7 +1213,7 @@ class TelegramHandlers:
             )
 
     # =========================================================
-    # Existing chaos/image actions
+    # EXISTING CHAOS / IMAGE ACTIONS
     # =========================================================
 
     def execute(
@@ -1151,7 +1306,7 @@ class TelegramHandlers:
             Action.IMAGE_CAPTION,
             Action.CONTEXT_MEME,
         }:
-            ref = self.rt.images.choose(
+            ref = self.rt.images.choose_random_media(
                 m.chat.id
             )
 
@@ -1167,44 +1322,67 @@ class TelegramHandlers:
                     info.file_path
                 )
 
-                caption = self.rt.ai.generate_text(
-                    response_prompt(
-                        context,
-                        lang,
-                        p,
-                        action.value,
-                    )
-                )
-
-                caption = humanize(
-                    caption,
-                    p,
-                    lang.as_dict(),
-                )
-
-                caption = self._clean_reply(
-                    caption
-                )
-
-                if action == Action.CONTEXT_MEME:
-                    out = caption_meme(
-                        raw,
-                        caption,
-                    )
-
-                    self.bot.send_photo(
+                # Video: send it directly.
+                if ref.media_type == "video":
+                    self.bot.send_video(
                         m.chat.id,
-                        out,
-                        caption=None,
+                        raw,
                         reply_to_message_id=reply_id,
                     )
-                else:
+
+                    self.rt.images.mark_used(
+                        ref
+                    )
+
+                    return
+
+                # Photo.
+                if action == Action.RANDOM_IMAGE:
                     self.bot.send_photo(
                         m.chat.id,
                         BytesIO(raw),
-                        caption=caption[:1024],
                         reply_to_message_id=reply_id,
                     )
+
+                else:
+                    caption = self.rt.ai.generate_text(
+                        response_prompt(
+                            context,
+                            lang,
+                            p,
+                            action.value,
+                        )
+                    )
+
+                    caption = humanize(
+                        caption,
+                        p,
+                        lang.as_dict(),
+                    )
+
+                    caption = self._clean_reply(
+                        caption
+                    )
+
+                    if action == Action.CONTEXT_MEME:
+                        out = caption_meme(
+                            raw,
+                            caption,
+                        )
+
+                        self.bot.send_photo(
+                            m.chat.id,
+                            out,
+                            caption=None,
+                            reply_to_message_id=reply_id,
+                        )
+                    else:
+                        self.bot.send_photo(
+                            m.chat.id,
+                            BytesIO(raw),
+                            caption=caption[:1024],
+                            reply_to_message_id=reply_id,
+                        )
 
                 self.rt.images.mark_used(
                     ref
@@ -1212,7 +1390,7 @@ class TelegramHandlers:
 
             except Exception:
                 log.exception(
-                    "image action failed"
+                    "random media action failed"
                 )
 
             return
@@ -1221,19 +1399,20 @@ class TelegramHandlers:
             Action.IMAGE_MASHUP,
             Action.COLLAGE,
         }:
-            a = self.rt.images.choose(
+            a = self.rt.images.choose_photo(
                 m.chat.id
             )
 
-            b = self.rt.images.choose(
-                m.chat.id
+            b = self.rt.images.choose_photo(
+                m.chat.id,
+                avoid_file_id=(
+                    a.telegram_file_id
+                    if a
+                    else None
+                ),
             )
 
-            if (
-                not a
-                or not b
-                or a.message_id == b.message_id
-            ):
+            if not a or not b:
                 return
 
             try:
@@ -1249,19 +1428,18 @@ class TelegramHandlers:
                     ).file_path
                 )
 
-                out = (
-                    side_by_side(
+                if action == Action.IMAGE_MASHUP:
+                    out = meme_mashup(
                         raw_a,
                         raw_b,
                     )
-                    if action == Action.IMAGE_MASHUP
-                    else collage(
+                else:
+                    out = collage(
                         [
                             raw_a,
                             raw_b,
                         ]
                     )
-                )
 
                 self.bot.send_photo(
                     m.chat.id,
@@ -1269,9 +1447,12 @@ class TelegramHandlers:
                     reply_to_message_id=reply_id,
                 )
 
+                self.rt.images.mark_used(a)
+                self.rt.images.mark_used(b)
+
             except Exception:
                 log.exception(
-                    "mashup failed"
+                    "image mashup failed"
                 )
 
             return
@@ -1285,6 +1466,8 @@ class TelegramHandlers:
                         "❤️",
                         "🔥",
                         "👀",
+                        "🤔",
+                        "👏",
                     ]
                 )
 
