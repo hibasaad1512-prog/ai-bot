@@ -2,26 +2,25 @@ from telebot.types import BotCommand, BotCommandScopeAllGroupChats, BotCommandSc
 
 OWNER_ID = 8734853156
 
-# Public menu for everyone else: /start only.
+# Private menu for everyone: /start only.
 PUBLIC_COMMANDS = [
-    BotCommand("start", "بدء الميرفاوية"),
+    BotCommand("start", "Start Merva"),
 ]
 
-# Group menu: Start + Settings.
+# Group menu: /start + /settings.
 GROUP_COMMANDS = [
-    BotCommand("start", "بدء الميرفاوية"),
-    BotCommand("settings", "إعدادات الكروب (للمشرفين)"),
+    BotCommand("start", "Start Merva"),
+    BotCommand("settings", "Group Settings (Admins)"),
 ]
 
 
 def install_commands(bot) -> None:
     try:
-        # Everyone's private chat: only /start.
+        # Regular private users: only /start.
         bot.set_my_commands(PUBLIC_COMMANDS)
         # Groups: /start + /settings.
         bot.set_my_commands(GROUP_COMMANDS, scope=BotCommandScopeAllGroupChats())
-        # Owner's private chat: deliberately still only /start.
-        # /admin is secret and must be typed manually; never advertise it.
+        # Owner's private chat: still only /start. /admin stays completely secret.
         bot.set_my_commands(PUBLIC_COMMANDS, scope=BotCommandScopeChat(chat_id=OWNER_ID))
     except Exception:
         pass
