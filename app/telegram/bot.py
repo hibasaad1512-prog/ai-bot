@@ -31,8 +31,33 @@ class KyoosBot:
         )
         self.runtime = Runtime()
 
-        # One visible owner command: /admin. Register it before the legacy
-        # memory handler so it always opens the complete GOD PANEL.
+        # Public /start is registered first so the visible behavior is stable.
+        # Private users get a useful intro + Add-to-group button; groups get a tiny reply.
+        @self.bot.message_handler(commands=["start"])
+        def public_start(message):
+            if getattr(message.chat, "type", "") in ("group", "supergroup"):
+                self.bot.reply_to(message, "3:")
+                return
+            kb = telebot.types.InlineKeyboardMarkup(row_width=1)
+            try:
+                me = self.bot.get_me()
+                username = getattr(me, "username", None)
+            except Exception:
+                username = None
+            if username:
+                kb.add(
+                    telebot.types.InlineKeyboardButton(
+                        "➕ Add Merva to a group",
+                        url=f"https://t.me/{username}?startgroup=true",
+                    )
+                )
+            self.bot.send_message(
+                message.chat.id,
+                "🤖 Merva\n\nAI assistant for group chats.\n\nAdd me to a group to get started.",
+                reply_markup=kb,
+            )
+
+        # One visible owner command: /admin. The command is never advertised in menus.
         @self.bot.message_handler(commands=["admin"])
         def god_panel(message):
             if not is_owner(getattr(message.from_user, "id", None)):
@@ -44,13 +69,13 @@ class KyoosBot:
                         "🔐 GOD PANEL — private owner control.",
                         reply_markup=god_menu(),
                     )
-                    self.bot.reply_to(message, "📩 أرسلت لك الـGOD PANEL على الخاص.")
+                    self.bot.reply_to(message, "📩 I sent the GOD PANEL to your private chat.")
                 except Exception:
-                    pass
+                    log.exception("could not open private GOD panel")
                 return
             self.bot.send_message(
                 message.chat.id,
-                "🔐 GOD PANEL\n\nكل أدوات الإدارة والتخصيص في مكان واحد.",
+                "🔐 GOD PANEL\n\nAll admin and automation controls are here.",
                 reply_markup=god_menu(),
             )
 
