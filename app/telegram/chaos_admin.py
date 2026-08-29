@@ -25,7 +25,7 @@ def toks(msgs):
 def menu():
  from telebot import types
  k=types.InlineKeyboardMarkup(row_width=2)
- for a,b in [('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط','mad:remix'),('🗳️ استطلاع','mad:poll'),('⭐ Tip','mad:tip'),('🎭 مود','mad:mood'),('🖼️ وسائط','mad:media'),('📊 الحالة','mad:status')]:k.add(types.InlineKeyboardButton(a,callback_data=b))
+ for a,b in [('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط','mad:remix'),('🗳️ استطلاع','mad:poll'),('⭐ Tip','mad:tip'),('🎭 مود','mad:mood'),('🖼️ وسائط','mad:media'),('📊 الحالة','mad:status'),('⚙️ Auto','mad:auto')]:k.add(types.InlineKeyboardButton(a,callback_data=b))
  k.add(types.InlineKeyboardButton('🛑 إيقاف المختبر',callback_data='mad:disable'));return k
 def group_menu(gs):
  from telebot import types
@@ -44,30 +44,34 @@ def register(bot,runtime):
    return
   d=c.data
   try:
+   try:bot.answer_callback_query(c.id)
+   except:pass
    if d=='mad:open':bot.send_message(c.message.chat.id,'🧪 مختبر الميرفاوية',reply_markup=menu());return
    if d=='mad:chats':bot.send_message(c.message.chat.id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db)));return
    if d=='mad:addchat':save(runtime.db,mad_waiting='addchat');bot.send_message(c.message.chat.id,'➕ أرسل Forward من الكروب أو chat ID.');return
    if d.startswith('mad:select:'):save(runtime.db,chaos_target_chat_id=int(d.split(':')[-1]),mad_waiting=False);bot.send_message(c.message.chat.id,'🎯 تم اختيار الكروب.',reply_markup=menu());return
+   if d=='mad:auto':
+    s=state(runtime.db); enabled=not bool(s.get('mad_auto'));save(runtime.db,mad_auto=enabled);bot.send_message(c.message.chat.id,('🤖 Auto Send: ON\nسيتم الإرسال العشوائي من وسائط الكروب عند توفر scheduler.' if enabled else '🛑 Auto Send: OFF'),reply_markup=menu());return
    t=target(runtime.db)
    if not t:return bot.send_message(c.message.chat.id,'🎯 اختار كروبًا أولًا.')
    msgs=runtime.db.recent_messages(t,120)
    if d=='mad:send':save(runtime.db,mad_waiting='send');return bot.send_message(c.message.chat.id,'📨 أرسل الرسالة/الصورة/الفيديو الآن.')
    if d=='mad:random' and msgs:bot.copy_message(t,t,random.choice(msgs).message_id)
-   elif d=='mad:remix':bot.send_message(t,' '.join(random.sample(toks(msgs),min(10,len(toks(msgs))))) if toks(msgs) else '3:')
-   elif d=='mad:tip':bot.send_message(t,f'⭐ Tip: {random.randint(1,1000)}')
+   elif d=='mad:remix':
+    words=toks(msgs); n=random.randint(3,min(15,len(words))) if words else 0; bot.send_message(t,' '.join(random.sample(words,n)) if n else '3:')
+   elif d=='mad:tip':bot.send_message(t,f'⭐ {random.randint(1,1000)}')
    elif d=='mad:mood':bot.send_message(t,random.choice(['3:','المود اليوم غريب شوية','صافي خليوها على الله']))
    elif d=='mad:media':
     media=[m for m in msgs if getattr(m,'media_type',None)]
     if media:bot.copy_message(t,t,random.choice(media).message_id)
     else:return bot.send_message(c.message.chat.id,'🖼️ لا توجد وسائط محفوظة.')
    elif d=='mad:poll':
-    words=list(dict.fromkeys(toks(msgs)))
-    if len(words)>=3:bot.send_poll(t,'شنو كلمة اليوم؟',random.sample(words,min(8,len(words))),is_anonymous=True)
+    words=list(dict.fromkeys(toks(msgs))); n=random.randint(3,min(8,len(words))) if len(words)>=3 else 0
+    if n:bot.send_poll(t,'شنو كلمة اليوم؟',random.sample(words,n),is_anonymous=True)
     else:return bot.send_message(c.message.chat.id,'🗳️ الكلمات غير كافية.')
-   elif d=='mad:status':bot.send_message(c.message.chat.id,f'🧪 الحالة\n🎯 {t}\n💬 {len(msgs)} رسالة',reply_markup=menu());return
-   elif d=='mad:disable':save(runtime.db,chaos_target_chat_id=None,mad_waiting=False);bot.send_message(c.message.chat.id,'🛑 تم إيقاف المختبر.',reply_markup=menu());return
-   try:bot.answer_callback_query(c.id,'تم التنفيذ ✅')
-   except:pass
+   elif d=='mad:status':bot.send_message(c.message.chat.id,f'🧪 الحالة\n🎯 {t}\n💬 {len(msgs)} رسالة\n🤖 Auto: {"ON" if state(runtime.db).get("mad_auto") else "OFF"}',reply_markup=menu());return
+   elif d=='mad:disable':save(runtime.db,chaos_target_chat_id=None,mad_waiting=False,mad_auto=False);bot.send_message(c.message.chat.id,'🛑 تم إيقاف المختبر.',reply_markup=menu());return
+   else:return bot.send_message(c.message.chat.id,'⚠️ الأمر غير معروف.',reply_markup=menu())
   except Exception:
    logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d);bot.send_message(c.message.chat.id,'❌ Merva Lab error. Check Render logs.')
  @bot.message_handler(content_types=['text','photo','video','sticker','animation','document','audio','voice','video_note'],func=lambda m:owner(m) and bool(state(runtime.db).get('mad_waiting')))
