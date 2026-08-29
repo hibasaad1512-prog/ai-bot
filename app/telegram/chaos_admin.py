@@ -25,10 +25,13 @@ def _admin_markup():
         types.InlineKeyboardButton("⚡ Random", callback_data="mad:random"),
     )
     kb.add(
+        types.InlineKeyboardButton("📨 Send anything", callback_data="mad:send"),
         types.InlineKeyboardButton("🧪 Remix", callback_data="mad:remix"),
-        types.InlineKeyboardButton("📊 Status", callback_data="mad:status"),
     )
-    kb.add(types.InlineKeyboardButton("❌ Disable", callback_data="mad:disable"))
+    kb.add(
+        types.InlineKeyboardButton("📊 Status", callback_data="mad:status"),
+        types.InlineKeyboardButton("❌ Disable", callback_data="mad:disable"),
+    )
     return kb
 
 
@@ -36,7 +39,7 @@ def _chat_markup(chats: list[dict[str, Any]]):
     from telebot import types
     kb = types.InlineKeyboardMarkup(row_width=1)
     for c in chats[:40]:
-        title = str(c.get("title") or c.get("chat_id"))[:45]
+        title = str(c.get("title") or f"Group {c['chat_id']}")[:45]
         kb.add(types.InlineKeyboardButton(f"🎯 {title}", callback_data=f"mad:select:{c['chat_id']}"))
     kb.add(types.InlineKeyboardButton("⬅️ Back", callback_data="mad:menu"))
     return kb
@@ -47,13 +50,10 @@ def _load_chats(db) -> list[dict[str, Any]]:
         from sqlalchemy import text
         rows = conn.execute(text("""
             SELECT chat_id, MAX(timestamp) AS last_seen,
-                   COUNT(*) AS messages,
-                   MAX(display_name) AS last_name
+                   COUNT(*) AS messages, MAX(display_name) AS last_name
             FROM chat_messages
             WHERE chat_id < 0
-            GROUP BY chat_id
-            ORDER BY last_seen DESC
-            LIMIT 40
+            GROUP BY chat_id ORDER BY last_seen DESC LIMIT 40
         """)).mappings().all()
     return [dict(r) for r in rows]
 
@@ -72,7 +72,6 @@ def _selected(db) -> int | None:
 
 
 def _save_selected(db, chat_id: int | None) -> None:
-    import json, time
     db.save_state(ADMIN_ID, {"chaos_target_chat_id": chat_id})
 
 
@@ -85,15 +84,11 @@ def _tokens(messages):
     for m in messages:
         text = getattr(m, "text", "") or ""
         words.extend(re.findall(r"[^\s]{2,24}", text))
-    # Keep interesting words, remove commands/URLs and obvious noise.
-    words = [w for w in words if not w.startswith(("/", "http://", "https://"))]
-    return words
+    return [w for w in words if not w.startswith(("/", "http://", "https://"))]
 
 
 def _send_random(bot, db, chat_id: int, source_messages) -> str:
-    msgs = [m for m in source_messages if not getattr(m, "is_bot", False)]
-    if not msgs:
-        msgs = source_messages
+    msgs = [m for m in source_messages if not getattr(m, "is_bot", False)] or source_messages
     if not msgs:
         bot.send_message(chat_id, "ما عنديش messages كافية نلعب بيها 😂")
         return "empty"
@@ -101,10 +96,9 @@ def _send_random(bot, db, chat_id: int, source_messages) -> str:
     mode = random.choice(["copy", "copy", "words", "emoji", "poll", "reply"])
     if mode in {"copy", "reply"}:
         m = random.choice(msgs)
-        # copy_message preserves photos, videos, stickers, animations, documents, etc.
         try:
             bot.copy_message(chat_id, chat_id, m.message_id)
-            return "media_or_message"
+            return "message_or_media"
         except Exception:
             if getattr(m, "text", ""):
                 bot.send_message(chat_id, m.text[:900])
@@ -121,15 +115,14 @@ def _send_random(bot, db, chat_id: int, source_messages) -> str:
         return "remix"
 
     if mode == "emoji":
-        bot.send_message(chat_id, " ".join(random.choices(["😭","😂","💀","🗿","👀","🤨","🫠","🗣️","✨","🤝","❤️"], k=random.randint(2,7))))
+        bot.send_message(chat_id, " ".join(random.choices(["😭", "😂", "💀", "🗿", "👀", "🤨", "🫠", "🗣️", "✨", "🤝", "❤️"], k=random.randint(2, 7))))
         return "emoji"
 
     words = _tokens(msgs)
     if len(words) >= 3:
         sample = random.sample(words, min(6, len(words)))
-        question = "شنو الكلمة اللي كتعاود بزاف؟" if random.random() < .5 else "واش هادي هي كلمة اليوم؟"
         try:
-            bot.send_poll(chat_id, question, sample[:10], is_anonymous=True)
+            bot.send_poll(chat_id, random.choice(["شنو الكلمة اللي كتعاود بزاف؟", "واش هادي هي كلمة اليوم؟"]), sample, is_anonymous=True)
             return "poll"
         except Exception:
             bot.send_message(chat_id, " | ".join(sample))
@@ -138,15 +131,28 @@ def _send_random(bot, db, chat_id: int, source_messages) -> str:
     return "fallback"
 
 
+def _relay_user_message(bot, target: int, message) -> None:
+    # copy_message lets the owner send text, photo, video, sticker, animation,
+    # document, voice or other Telegram-supported content without downloading it.
+    try:
+        bot.copy_message(target, message.chat.id, message.message_id)
+    except Exception:
+        if getattr(message, "text", None):
+            bot.send_message(target, message.text)
+        else:
+            bot.send_message(message.chat.id, "ماقدرتش ننسخ هاد النوع ديال الرسالة 😅")
+
+
 def register(bot, runtime) -> None:
+    def _admin_ok(m):
+        uid = getattr(getattr(m, "from_user", None), "id", None)
+        return _is_private(m) and _is_admin(uid)
+
     @bot.message_handler(commands=["mad", "madadmin", "chaosadmin"])
     def mad_command(m):
         if not _admin_ok(m):
             return
         bot.send_message(m.chat.id, "🧪 MERVA LAB\n\nاختار الكروب ومن بعد نقدر نلعبو فيه: رسائل، صور، فيديوهات، stickers، polls، remix، emojis...", reply_markup=_admin_markup())
-
-    def _admin_ok(m):
-        return _is_private(m.from_user.id if getattr(m, "from_user", None) else None) and _is_admin(m.from_user.id if getattr(m, "from_user", None) else None)
 
     @bot.callback_query_handler(func=lambda c: bool(c.data) and c.data.startswith("mad:"))
     def mad_callback(c):
@@ -164,19 +170,24 @@ def register(bot, runtime) -> None:
             elif data.startswith("mad:select:"):
                 target = int(data.split(":", 2)[2])
                 _save_selected(runtime.db, target)
-                bot.edit_message_text(f"🎯 Selected chat: `{target}`\n\nمن الآن Random/Remix غادي يخدمو فيه.", c.message.chat.id, c.message.message_id, parse_mode="Markdown", reply_markup=_admin_markup())
+                bot.edit_message_text(f"🎯 Selected chat: `{target}`\n\nمن الآن Random / Remix / Send غادي يخدمو فيه.", c.message.chat.id, c.message.message_id, parse_mode="Markdown", reply_markup=_admin_markup())
             elif data == "mad:random":
                 target = _selected(runtime.db)
                 if not target:
                     bot.answer_callback_query(c.id, "اختار كروب أولاً", show_alert=True); return
                 result = _send_random(bot, runtime.db, target, _recent(runtime.db, target, 120))
                 bot.answer_callback_query(c.id, f"sent: {result}")
+            elif data == "mad:send":
+                target = _selected(runtime.db)
+                if not target:
+                    bot.answer_callback_query(c.id, "اختار كروب أولاً", show_alert=True); return
+                bot.send_message(c.message.chat.id, f"📨 صيفط ليا دابا أي حاجة: text / photo / video / sticker / GIF / document...\n🎯 غادي نمشيها للكروب المحدد: `{target}`", parse_mode="Markdown")
+                bot.register_next_step_handler(c.message, lambda m: _relay_user_message(bot, target, m))
             elif data == "mad:remix":
                 target = _selected(runtime.db)
                 if not target:
                     bot.answer_callback_query(c.id, "اختار كروب أولاً", show_alert=True); return
-                msgs = _recent(runtime.db, target, 120)
-                words = _tokens(msgs)
+                words = _tokens(_recent(runtime.db, target, 120))
                 if words:
                     random.shuffle(words)
                     text = " ".join(words[:random.randint(4, 12)])
@@ -187,13 +198,13 @@ def register(bot, runtime) -> None:
                     bot.answer_callback_query(c.id, "ما كايناش كلمات كافية", show_alert=True)
             elif data == "mad:status":
                 target = _selected(runtime.db)
-                chats = _load_chats(runtime.db)
-                bot.edit_message_text(f"🧪 MERVA LAB STATUS\n\n🎯 Target: {target or 'none'}\n💬 Known groups: {len(chats)}\n🎲 Modes: message/media/remix/poll/emoji\n⭐ Tips: 1–1000", c.message.chat.id, c.message.message_id, reply_markup=_admin_markup())
+                bot.edit_message_text(f"🧪 MERVA LAB STATUS\n\n🎯 Target: {target or 'none'}\n💬 Known groups: {len(_load_chats(runtime.db))}\n🎲 Modes: message/media/remix/poll/emoji\n⭐ Tips: 1–1000", c.message.chat.id, c.message.message_id, reply_markup=_admin_markup())
             elif data == "mad:disable":
                 _save_selected(runtime.db, None)
                 bot.edit_message_text("🛑 Random lab disabled. No target selected.", c.message.chat.id, c.message.message_id, reply_markup=_admin_markup())
         except Exception:
-            bot.answer_callback_query(c.id, "صار خطأ، شوف logs", show_alert=True)
+            try: bot.answer_callback_query(c.id, "صار خطأ، شوف logs", show_alert=True)
+            except Exception: pass
             raise
         finally:
             try: bot.answer_callback_query(c.id)
