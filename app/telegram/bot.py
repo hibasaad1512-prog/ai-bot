@@ -9,6 +9,7 @@ from app.config import settings
 from app.runtime import Runtime
 from app.telegram.commands import install_commands
 from app.telegram.handlers import TelegramHandlers
+from app.memory.handlers import MemoryHandlers
 from app.worker.scheduler import ProactiveScheduler
 
 log = logging.getLogger(__name__)
@@ -28,6 +29,11 @@ class KyoosBot:
         )
         self.runtime = Runtime()
         self.handlers = TelegramHandlers(self.bot, self.runtime)
+        self.memory_handlers = MemoryHandlers(
+            self.bot,
+            self.runtime,
+            self.handlers,
+        )
 
         try:
             me = self.bot.get_me()
@@ -47,7 +53,6 @@ class KyoosBot:
 
         try:
             url = f"{settings.public_base_url}/telegram/webhook"
-            # Do not leave an old webhook configuration behind.
             self.bot.remove_webhook()
             self.bot.set_webhook(
                 url=url,
