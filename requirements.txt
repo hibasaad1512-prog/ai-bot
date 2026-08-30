@@ -8,3 +8,4 @@ psycopg[binary]>=3.2,<4
 redis>=6,<8
 gunicorn>=23,<24
 pytest>=8,<9
+google-genai>=1.30,<2
