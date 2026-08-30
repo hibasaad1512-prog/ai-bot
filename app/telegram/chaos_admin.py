@@ -1,7 +1,13 @@
 from __future__ import annotations
 import json, random, logging
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest
+from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
+from telebot import apihelper
+
+try:
+    from telebot.apihelper import ApiTelegramException as BadRequest
+except ImportError:
+    BadRequest = Exception
+
 ADMIN_ID=8734853156
 
 def owner(m):
