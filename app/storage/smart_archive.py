@@ -1,52 +1,41 @@
 """Lightweight Telegram archive helpers.
 
-Stores metadata only; media binaries stay on Telegram/temporary storage.
+Only metadata and Telegram file IDs are retained; binary media is temporary.
 """
 from __future__ import annotations
-
 import logging
 from datetime import datetime, timezone
 from typing import Any
-
 logger = logging.getLogger(__name__)
 
-
-def _now() -> datetime:
+def _now():
     return datetime.now(timezone.utc)
 
-
-def _media_info(message: Any) -> tuple[str | None, str | None, int | None]:
-    for attr, kind in (
-        ("photo", "photo"), ("video", "video"), ("animation", "animation"),
-        ("document", "document"), ("audio", "audio"), ("voice", "voice"),
-        ("video_note", "video_note"), ("sticker", "sticker"),
-    ):
+def _media_info(message: Any):
+    for attr, kind in (("photo","photo"),("video","video"),("animation","animation"),("document","document"),("audio","audio"),("voice","voice"),("video_note","video_note"),("sticker","sticker")):
         value = getattr(message, attr, None)
         if value:
             obj = value[-1] if isinstance(value, (list, tuple)) else value
             return getattr(obj, "file_id", None), kind, getattr(obj, "file_size", None)
     return None, None, None
 
-
-def _get_store(runtime: Any):
+def _get_store(runtime):
     for name in ("db", "database", "storage"):
         store = getattr(runtime, name, None)
         if store is not None:
             return store
     return None
 
+def register_smart_archive(bot=None, runtime=None):
+    """Install non-blocking archive helpers; compatible with KyoosBot startup."""
+    if runtime is None:
+        runtime = bot
+    if runtime is None:
+        return
+    runtime.smart_archive_enabled = True
+    runtime.smart_archive_media_policy = "telegram_file_id_only"
 
-def register_smart_archive(runtime: Any) -> None:
-    """Register a best-effort archive hook without blocking Telegram handlers.
-
-    The function intentionally accepts the existing Runtime object and only
-    attaches a callback when the runtime exposes a compatible registration API.
-    Missing persistence capabilities are non-fatal.
-    """
-    setattr(runtime, "smart_archive_enabled", True)
-    setattr(runtime, "smart_archive_media_policy", "telegram_file_id_only")
-
-    async def archive_message(message: Any) -> None:
+    async def archive_message(message):
         try:
             store = _get_store(runtime)
             if store is None:
@@ -73,5 +62,5 @@ def register_smart_archive(runtime: Any) -> None:
         except Exception:
             logger.exception("smart archive failed; continuing without blocking bot")
 
-    setattr(runtime, "archive_message", archive_message)
+    runtime.archive_message = archive_message
     logger.info("Smart archive enabled (metadata/file_id only)")
