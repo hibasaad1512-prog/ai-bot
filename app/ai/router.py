@@ -13,12 +13,12 @@ class OpenAICompatibleProvider(AIProvider):
   if not self.enabled: raise RuntimeError(f'{self.name} is not configured')
   headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}
   if self.name=='openrouter': headers.update({'HTTP-Referer':os.getenv('OPENROUTER_HTTP_REFERER','https://localhost'),'X-Title':os.getenv('OPENROUTER_APP_NAME','Merva AI')})
-  payload={'model':self.model,'messages':messages,'max_tokens':160,**extra}
-  r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json=payload,timeout=(1.2,3.8)); r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
+  payload={'model':self.model,'messages':messages,'max_tokens':96,'stream':False,**extra}
+  r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json=payload,timeout=(0.7,1.8)); r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
   if not choices: raise RuntimeError(f'{self.name}: empty response')
   return data
  def _messages(self,prompt,system): return ([{'role':'system','content':system}] if system else [])+[{'role':'user','content':prompt}]
- def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=0.35)['choices'][0]['message'].get('content','')).strip()
+ def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=0.3)['choices'][0]['message'].get('content','')).strip()
  def generate_structured(self,prompt,schema,system=None): return json.loads(self._request(self._messages(prompt,system),temperature=0,response_format={'type':'json_object'})['choices'][0]['message'].get('content','{}'))
  def analyze_image(self,image_bytes,prompt):
   b64=base64.b64encode(image_bytes).decode(); msg=[{'role':'user','content':[{'type':'text','text':prompt},{'type':'image_url','image_url':{'url':f'data:image/jpeg;base64,{b64}'}}]}]; return str(self._request(msg,temperature=0)['choices'][0]['message'].get('content','')).strip()
@@ -90,19 +90,11 @@ class MultiProvider(AIProvider):
     r=getattr(self.providers[name],method)(*args,**kwargs); elapsed=time.monotonic()-started; old=self._latency.get(name,elapsed); self._latency[name]=old*0.7+elapsed*0.3
     if isinstance(r,str):r=r.strip()
     if r:return r
-    errors.append(f'{name}:empty_response'); self._mark_failure(name,RuntimeError('empty response'))
+    self._mark_failure(name,RuntimeError('empty response'))
    except Exception as e:
-    self._latency[name]=time.monotonic()-started; errors.append(f'{name}:{type(e).__name__}'); self._mark_failure(name,e); log.warning('AI provider %s failed; fallback engaged',name)
+    self._latency[name]=time.monotonic()-started; errors.append(f'{name}:{type(e).__name__}'); self._mark_failure(name,e)
   raise RuntimeError('All configured AI providers/keys failed: '+', '.join(errors) if errors else 'No configured AI providers')
  def generate_text(self,prompt,system=None): return self._try('generate_text',prompt,system)
  def generate_structured(self,prompt,schema,system=None): return self._try('generate_structured',prompt,schema,system)
  def analyze_image(self,image_bytes,prompt): return self._try('analyze_image',image_bytes,prompt)
- def generate_image(self,prompt):
-  self.refresh()
-  for name in sorted(self.order,key=lambda n:(self._latency.get(n,99.0),self.order.index(n))):
-   if self.providers.get(name) and getattr(self.providers[name],'enabled',False) and self._cooldown.get(name,0)<=time.time():
-    try:
-     r=self.providers[name].generate_image(prompt)
-     if r:return r
-    except Exception as e:self._mark_failure(name,e)
-  return None
+ def generate_image(self,prompt): return None
