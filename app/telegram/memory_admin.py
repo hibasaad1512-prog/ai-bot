@@ -14,9 +14,10 @@ def chat_menu(chats,current=None):
     kb=types.InlineKeyboardMarkup(row_width=1)
     if not chats: kb.add(types.InlineKeyboardButton('⚠️ No chats detected yet',callback_data='owner:back'))
     for x in chats:
-        cid=int(x['chat_id']); title=str(x.get('title') or f'Chat {cid}')[:48]; mark=' ⭐' if current==cid else ''
+        cid=int(x['chat_id']); title=str(x.get('title') or 'Unnamed group')[:48]; mark=' ⭐' if current==cid else ''
         kb.add(types.InlineKeyboardButton(f'🎯 {title}{mark}',callback_data=f'owner:chat:{cid}'))
-    kb.add(types.InlineKeyboardButton('⬅️ Back',callback_data='owner:back')); return kb
+    kb.add(types.InlineKeyboardButton('⬅️ Back',callback_data='owner:back'))
+    return kb
 
 def memory_menu():
     kb=types.InlineKeyboardMarkup(row_width=2)
