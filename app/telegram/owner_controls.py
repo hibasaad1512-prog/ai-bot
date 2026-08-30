@@ -10,10 +10,8 @@ def _selected(db): return int(_state(db).get('selected_chat_id',0) or 0)
 def _chats(db):
     s=_state(db); known={}
     for x in s.get('known_chats',[]):
-        try:
-            cid=int(x.get('chat_id'))
-        except Exception:
-            continue
+        try: cid=int(x.get('chat_id'))
+        except Exception: continue
         if cid not in known or x.get('title'):
             known[cid]={'chat_id':cid,'title':x.get('title'),'username':x.get('username')}
     for cid in db.list_chat_ids():
@@ -28,12 +26,11 @@ def _refresh_chat_names(bot,db):
         cid=int(x['chat_id']); title=x.get('title'); username=x.get('username')
         try:
             chat=bot.get_chat(cid)
-            fresh_title=getattr(chat,'title',None) or (getattr(chat,'first_name',None) or getattr(chat,'last_name',None))
+            fresh_title=getattr(chat,'title',None) or getattr(chat,'first_name',None) or getattr(chat,'last_name',None)
             fresh_username=getattr(chat,'username',None)
             if fresh_title and fresh_title != title: title=fresh_title; changed=True
             if fresh_username and fresh_username != username: username=fresh_username; changed=True
-        except Exception:
-            pass
+        except Exception: pass
         out.append({'chat_id':cid,'title':title,'username':username})
     if changed:
         s=_state(db); s['known_chats']=out[:200]; _save(db,s)
@@ -41,9 +38,21 @@ def _refresh_chat_names(bot,db):
 
 def _back(target='owner:back'):
     k=types.InlineKeyboardMarkup(); k.add(types.InlineKeyboardButton('⬅️ Back',callback_data=target)); return k
+
+def _safe_edit(bot, chat_id, message_id, text, reply_markup=None):
+    try:
+        bot.edit_message_text(text, chat_id, message_id, reply_markup=reply_markup)
+        return True
+    except Exception as e:
+        # Telegram returns 400 when refresh produces identical content/markup.
+        if 'message is not modified' in str(e).lower():
+            return True
+        raise
+
 def _set_lab_target(db,cid):
     s=db.get_json('chat_state','chat_id',OWNER_ID,{})
     s['chaos_target_chat_id']=int(cid); db.save_state(OWNER_ID,s)
+
 def _test_provider(runtime,p):
     runtime.ai.refresh(); keys=runtime.ai.provider_keys(p)
     if not keys:return False,'No saved key'
@@ -56,8 +65,9 @@ def _test_provider(runtime,p):
             out=prov.generate_text('Reply with exactly: ping',system='Connectivity test. Reply with exactly the requested word.')
             if out:return True,f'Connected successfully ({name})'
             errors.append(f'{name}:empty response')
-        except Exception as e:errors.append(f'{name}:{type(e).__name__}')
+        except Exception as e:errors.append(f'{name}:{type(e).__name__}:{str(e)[:100]}')
     return False,'All saved keys failed: '+', '.join(errors[:6])
+
 def register(bot,runtime):
     @bot.message_handler(content_types=['text','photo','video','sticker','animation','document','audio','voice','video_note'],func=lambda m: bool(getattr(m,'chat',None)) and getattr(m.chat,'type','') in ('group','supergroup'))
     def track_chat(m):
@@ -73,35 +83,31 @@ def register(bot,runtime):
         d=c.data; uid=int(c.from_user.id)
         try:
             bot.answer_callback_query(c.id)
-            if d=='owner:exit':
-                try: bot.delete_message(c.message.chat.id,c.message.message_id)
-                except Exception: pass
-                return
             if d in ('owner:back','owner:menu'):
-                bot.edit_message_text('🔐 GOD PANEL',c.message.chat.id,c.message.message_id,reply_markup=menu()); return
+                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🔐 GOD PANEL',reply_markup=menu()); return
             if d in ('owner:chats','owner:chats_refresh'):
                 chats=_refresh_chat_names(bot,runtime.db)
                 kb=chat_menu(chats,_selected(runtime.db))
-                # Add a real refresh/exit row without changing the existing chat menu API.
-                kb.add(types.InlineKeyboardButton('🔄 Refresh',callback_data='owner:chats_refresh'),types.InlineKeyboardButton('🚪 Exit',callback_data='owner:exit'))
-                bot.edit_message_text('🎯 Choose Chat\n\nGroups are detected automatically.\nNames are refreshed from Telegram.',c.message.chat.id,c.message.message_id,reply_markup=kb); return
+                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🎯 Choose Chat\n\nGroups are detected automatically.\nNames are refreshed from Telegram.',reply_markup=kb); return
             if d.startswith('owner:chat:'):
                 cid=int(d.split(':')[-1]); s=_state(runtime.db); s['selected_chat_id']=cid; _save(runtime.db,s); _set_lab_target(runtime.db,cid)
                 chats=_refresh_chat_names(bot,runtime.db)
                 title=next((x.get('title') for x in chats if int(x['chat_id'])==cid),None) or f'Chat {cid}'
-                bot.edit_message_text(f'🎯 Selected: {title}',c.message.chat.id,c.message.message_id,reply_markup=menu()); return
-            if d=='owner:providers': bot.edit_message_text('🔑 AI Providers\n\nKeys are stored persistently in the database. They are masked in the admin UI and are never echoed after entry.',c.message.chat.id,c.message.message_id,reply_markup=provider_menu(PROVIDERS)); return
+                _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🎯 Selected: {title}',reply_markup=menu()); return
             if d.startswith('owner:provider:'):
-                p=d.split(':')[-1]; bot.edit_message_text(f'🔑 {p.title()}\n\nSaved keys: {len(runtime.ai.provider_keys(p))}\n\nKeys survive restarts and are masked in the UI.',c.message.chat.id,c.message.message_id,reply_markup=provider_actions(p)); return
+                p=d.split(':')[-1]; _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🔑 {p.title()}\n\nSaved keys: {len(runtime.ai.provider_keys(p))}\n\nKeys survive restarts and are masked in the UI.',reply_markup=provider_actions(p)); return
+            if d=='owner:providers':
+                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🔑 AI Providers\n\nKeys are stored persistently in the database. They are masked in the admin UI and are never echoed after entry.',reply_markup=provider_menu(PROVIDERS)); return
             if d.startswith('owner:padd:'):
-                p=d.split(':')[-1]; WAIT[uid]=('add',p); bot.edit_message_text(f'➕ Add {p.title()} API key\n\nSend the key here. It is stored in the database and never echoed.\n\nIt will be tested immediately.',c.message.chat.id,c.message.message_id,reply_markup=_back(f'owner:provider:{p}')); return
+                p=d.split(':')[-1]; WAIT[uid]=('add',p); _safe_edit(bot,c.message.chat.id,c.message.message_id,f'➕ Add {p.title()} API key\n\nSend the key here. It is stored in the database and never echoed.\n\nIt will be tested immediately.',reply_markup=_back(f'owner:provider:{p}')); return
             if d.startswith('owner:plist:'):
-                p=d.split(':')[-1]; keys=runtime.ai.provider_keys(p); lines=[f'🔑 {p.title()} keys: {len(keys)}']+[f'{i}. {k[:4]}…{k[-4:]}' for i,k in enumerate(keys,1)]; bot.edit_message_text('\n'.join(lines),c.message.chat.id,c.message.message_id,reply_markup=provider_actions(p)); return
+                p=d.split(':')[-1]; keys=runtime.ai.provider_keys(p); lines=[f'🔑 {p.title()} keys: {len(keys)}']+[f'{i}. {k[:4]}…{k[-4:]}' for i,k in enumerate(keys,1)]; _safe_edit(bot,c.message.chat.id,c.message.message_id,'\n'.join(lines),reply_markup=provider_actions(p)); return
             if d.startswith('owner:pdelete:'):
-                p=d.split(':')[-1]; WAIT[uid]=('delete',p); bot.edit_message_text(f'🗑 Send the {p.title()} key number to delete:',c.message.chat.id,c.message.message_id,reply_markup=_back(f'owner:provider:{p}')); return
+                p=d.split(':')[-1]; WAIT[uid]=('delete',p); _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🗑 Send the {p.title()} key number to delete:',reply_markup=_back(f'owner:provider:{p}')); return
             if d.startswith('owner:ptest:'):
-                p=d.split(':')[-1]; ok,msg=_test_provider(runtime,p); icon='🟢' if ok else '🔴'; bot.edit_message_text(f'🧪 {p.title()}\n\n{icon} {msg}',c.message.chat.id,c.message.message_id,reply_markup=provider_actions(p)); return
-        except Exception as e: bot.send_message(c.message.chat.id,f'❌ Admin error: {type(e).__name__}: {str(e)[:160]}')
+                p=d.split(':')[-1]; ok,msg=_test_provider(runtime,p); icon='🟢' if ok else '🔴'; _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🧪 {p.title()}\n\n{icon} {msg}',reply_markup=provider_actions(p)); return
+        except Exception as e:
+            bot.send_message(c.message.chat.id,f'❌ Admin error: {type(e).__name__}: {str(e)[:160]}')
     @bot.message_handler(content_types=['text'],func=lambda m:is_owner(getattr(m.from_user,'id',None)) and getattr(m.chat,'type','')=='private' and int(getattr(m.from_user,'id',0)) in WAIT)
     def owner_input(m):
         uid=int(m.from_user.id); action,p=WAIT.pop(uid); value=(m.text or '').strip()
@@ -113,4 +119,4 @@ def register(bot,runtime):
             bot.send_message(m.chat.id,f'💾 Saved permanently: {p.title()}\n{icon} {msg}\n\n🔄 If it fails later, the router tries the next key/provider automatically.',reply_markup=provider_actions(p))
         else:
             try: ok,reason=runtime.ai.delete_provider_key(p,int(value)-1); bot.send_message(m.chat.id,f"{'🗑️ Deleted' if ok else '❌ Failed'} — {reason}",reply_markup=provider_actions(p))
-            except: bot.send_message(m.chat.id,'❌ Invalid key number.',reply_markup=provider_actions(p))
+            except Exception: bot.send_message(m.chat.id,'❌ Invalid key number.',reply_markup=provider_actions(p))
