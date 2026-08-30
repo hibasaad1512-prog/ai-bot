@@ -11,12 +11,12 @@ class OpenAICompatibleProvider(AIProvider):
  def enabled(self): return bool(self.api_key and self.model)
  def _request(self,messages,**extra):
   if not self.enabled: raise RuntimeError(f'{self.name} is not configured')
-  r=requests.post(f'{self.base_url}/chat/completions',headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'},json={'model':self.model,'messages':messages,**extra},timeout=45)
+  r=requests.post(f'{self.base_url}/chat/completions',headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'},json={'model':self.model,'messages':messages,**extra},timeout=35)
   r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
   if not choices: raise RuntimeError(f'{self.name}: empty response')
   return data
  def _messages(self,prompt,system): return ([{'role':'system','content':system}] if system else [])+[{'role':'user','content':prompt}]
- def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=1.0)['choices'][0]['message'].get('content','')).strip()
+ def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=0.65)['choices'][0]['message'].get('content','')).strip()
  def generate_structured(self,prompt,schema,system=None): return json.loads(self._request(self._messages(prompt,system),temperature=0,response_format={'type':'json_object'})['choices'][0]['message'].get('content','{}'))
  def analyze_image(self,image_bytes,prompt):
   b64=base64.b64encode(image_bytes).decode(); msg=[{'role':'user','content':[{'type':'text','text':prompt},{'type':'image_url','image_url':{'url':f'data:image/jpeg;base64,{b64}'}}]}]; return str(self._request(msg,temperature=0)['choices'][0]['message'].get('content','')).strip()
@@ -54,6 +54,7 @@ class MultiProvider(AIProvider):
  def mask_key(self,key): return self.groq.mask_key(key)
  def add_key(self,key): return self.groq.add_key(key)
  def delete_key(self,index): return self.groq.delete_key(index)
+ def switch_key(self,index): return self.groq.switch_key(index)
  def provider_names(self): return ['groq','gemini','openai','deepseek','openrouter','together']
  def provider_keys(self,provider): self.refresh(); return list(self._keys().get(provider,[]))
  def add_provider_key(self,provider,key):
@@ -77,6 +78,7 @@ class MultiProvider(AIProvider):
    if not p or not getattr(p,'enabled',False):continue
    try:
     r=getattr(p,method)(*args,**kwargs)
+    if isinstance(r,str): r=r.strip()
     if r:return r
     errors.append(f'{name}:empty_response')
    except Exception as e:
