@@ -34,7 +34,7 @@ class KyoosBot:
         def god_panel(message):
             if not is_owner(getattr(message.from_user,'id',None)): return
             if getattr(message.chat,'type','')!='private':
-                try:self.bot.send_message(message.from_user.id,'🔐 GOD PANEL — private owner control.',reply_markup=god_menu()); self.bot.reply_to(message,'📩 I sent the GOD PANEL to your private chat.')
+                try:self.bot.send_message(message.from_user.id,'🔐 GOD PANEL — private owner control.'); self.bot.reply_to(message,'📩 I sent the GOD PANEL to your private chat.')
                 except Exception: log.exception('could not open private GOD panel')
                 return
             self.bot.send_message(message.chat.id,'🔐 GOD PANEL\n\nAll admin and automation controls are here.',reply_markup=god_menu())
@@ -43,7 +43,7 @@ class KyoosBot:
         register_moderation(self.bot,self.runtime)
         self.handlers=TelegramHandlers(self.bot,self.runtime)
         self.memory_handlers=MemoryHandlers(self.bot,self.runtime,self.handlers)
-        register_smart_archive(self.bot,self.runtime)
+        register_smart_archive(self.runtime)
         self.media_automation=MediaAutomation(self.bot,self.runtime); self.media_automation.start()
         try:self.handlers._bot_username=(self.bot.get_me().username or '').lower()
         except Exception:self.handlers._bot_username=''; log.exception('Telegram getMe failed')
