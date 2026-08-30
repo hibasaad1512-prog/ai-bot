@@ -24,6 +24,11 @@ class KyoosBot:
         @self.bot.my_chat_member_handler()
         def membership_update(update):
             self._sync_membership(update)
+        # Telegram sends edited messages as a separate update type.  Ignore them
+        # deliberately: an edit must never trigger a second AI reply.
+        @self.bot.edited_message_handler(func=lambda m: True)
+        def edited_message_ignored(message):
+            return
         @self.bot.message_handler(commands=['start'])
         def public_start(message):
             if getattr(message.chat,'type','') in ('group','supergroup'):
@@ -61,7 +66,6 @@ class KyoosBot:
             cid=getattr(chat,'id',None)
             if cid is None:return
             status=str(getattr(new,'status','')).lower()
-            # Member/admin means the bot is currently present. Left/kicked means absent.
             present=status in {'member','administrator','creator'}
             s=self.runtime.db.get_json('chat_settings','chat_id',0,{})
             chats=[]
@@ -72,7 +76,6 @@ class KyoosBot:
             if present:
                 chats.append({'chat_id':int(cid),'title':getattr(chat,'title',None),'username':getattr(chat,'username',None),'bot_member':True})
             s['known_chats']=chats[-200:]
-            # Keep an explicit membership map so stale database chat history cannot resurrect a left group.
             memberships=dict(s.get('bot_memberships',{})); memberships[str(cid)]=present; s['bot_memberships']=memberships
             self.runtime.db.save_chat_settings(0,s)
             log.info('telegram membership sync chat=%s status=%s present=%s',cid,status,present)
