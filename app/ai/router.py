@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, logging, os, base64, random, time, threading, requests
+import json, logging, os, base64, time, threading, requests
 from .base import AIProvider
 from .groq import GroqProvider
 from .gemini import GeminiProvider
@@ -13,12 +13,14 @@ class OpenAICompatibleProvider(AIProvider):
   if not self.enabled: raise RuntimeError(f'{self.name} is not configured')
   headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}
   if self.name=='openrouter': headers.update({'HTTP-Referer':os.getenv('OPENROUTER_HTTP_REFERER','https://localhost'),'X-Title':os.getenv('OPENROUTER_APP_NAME','Merva AI')})
-  r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json={'model':self.model,'messages':messages,**extra},timeout=12)
+  # Short, bounded requests prevent one slow/free endpoint from blocking the bot.
+  payload={'model':self.model,'messages':messages,'max_tokens':220,**extra}
+  r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json=payload,timeout=(3.0,7.0))
   r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
   if not choices: raise RuntimeError(f'{self.name}: empty response')
   return data
  def _messages(self,prompt,system): return ([{'role':'system','content':system}] if system else [])+[{'role':'user','content':prompt}]
- def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=0.55)['choices'][0]['message'].get('content','')).strip()
+ def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=0.45)['choices'][0]['message'].get('content','')).strip()
  def generate_structured(self,prompt,schema,system=None): return json.loads(self._request(self._messages(prompt,system),temperature=0,response_format={'type':'json_object'})['choices'][0]['message'].get('content','{}'))
  def analyze_image(self,image_bytes,prompt):
   b64=base64.b64encode(image_bytes).decode(); msg=[{'role':'user','content':[{'type':'text','text':prompt},{'type':'image_url','image_url':{'url':f'data:image/jpeg;base64,{b64}'}}]}]; return str(self._request(msg,temperature=0)['choices'][0]['message'].get('content','')).strip()
@@ -76,13 +78,12 @@ class MultiProvider(AIProvider):
  def provider_status(self):
   self.refresh(); now=time.time(); return [(n,bool(getattr(self.providers.get(n),'enabled',False)) and self._cooldown.get(n,0)<=now) for n in self.order]
  def _mark_failure(self,name,exc):
-  msg=str(exc).lower(); cooldown=15.0
-  if '429' in msg or 'rate' in msg or 'quota' in msg: cooldown=45.0
+  msg=str(exc).lower(); cooldown=10.0
+  if '429' in msg or 'rate' in msg or 'quota' in msg: cooldown=30.0
   elif '401' in msg or '403' in msg or 'invalid api key' in msg or 'authentication' in msg: cooldown=600.0
   self._cooldown[name]=time.time()+cooldown
  def _try(self,method,*args,**kwargs):
   self.refresh(); now=time.time(); candidates=[n for n in self.order if self.providers.get(n) and getattr(self.providers.get(n),'enabled',False) and self._cooldown.get(n,0)<=now]
-  # Keep configured priority for latency; only shuffle ties/fallbacks.
   errors=[]
   for name in candidates:
    try:
