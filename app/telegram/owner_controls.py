@@ -8,32 +8,49 @@ def _save(db,s): db.save_chat_settings(0,s)
 def _selected(db): return int(_state(db).get('selected_chat_id',0) or 0)
 
 def _chats(db):
-    s=_state(db); known={}
+    s=_state(db); known={}; memberships=s.get('bot_memberships',{})
     for x in s.get('known_chats',[]):
         try: cid=int(x.get('chat_id'))
         except Exception: continue
+        # A chat explicitly marked absent must never be resurrected from old memory/db rows.
+        if str(cid) in memberships and not memberships[str(cid)]: continue
         if cid not in known or x.get('title'):
-            known[cid]={'chat_id':cid,'title':x.get('title'),'username':x.get('username')}
+            known[cid]={'chat_id':cid,'title':x.get('title'),'username':x.get('username'),'bot_member':True}
     for cid in db.list_chat_ids():
         try: cid=int(cid)
         except Exception: continue
-        known.setdefault(cid,{'chat_id':cid,'title':None,'username':None})
+        if str(cid) in memberships and not memberships[str(cid)]: continue
+        known.setdefault(cid,{'chat_id':cid,'title':None,'username':None,'bot_member':True})
     return list(known.values())
 
 def _refresh_chat_names(bot,db):
     chats=_chats(db); changed=False; out=[]
+    try: bot_id=int(bot.get_me().id)
+    except Exception: bot_id=None
     for x in chats:
         cid=int(x['chat_id']); title=x.get('title'); username=x.get('username')
         try:
+            if bot_id is not None:
+                member=bot.get_chat_member(cid,bot_id)
+                status=str(getattr(member,'status','')).lower()
+                present=status in {'member','administrator','creator'}
+                if not present:
+                    x['bot_member']=False
+                    s=_state(db); memberships=dict(s.get('bot_memberships',{})); memberships[str(cid)]=False; s['bot_memberships']=memberships
+                    changed=True
+                    continue
             chat=bot.get_chat(cid)
             fresh_title=getattr(chat,'title',None) or getattr(chat,'first_name',None) or getattr(chat,'last_name',None)
             fresh_username=getattr(chat,'username',None)
             if fresh_title and fresh_title != title: title=fresh_title; changed=True
             if fresh_username and fresh_username != username: username=fresh_username; changed=True
-        except Exception: pass
-        out.append({'chat_id':cid,'title':title,'username':username})
+        except Exception as exc:
+            # If Telegram says the bot cannot access the chat, do not display stale membership.
+            if any(t in str(exc).lower() for t in ('chat not found','user not found','kicked','forbidden')):
+                s=_state(db); memberships=dict(s.get('bot_memberships',{})); memberships[str(cid)]=False; s['bot_memberships']=memberships; changed=True; continue
+        out.append({'chat_id':cid,'title':title,'username':username,'bot_member':True})
     if changed:
-        s=_state(db); s['known_chats']=out[:200]; _save(db,s)
+        s=_state(db); s['known_chats']=out[-200:]; _save(db,s)
     return out
 
 def _back(target='owner:back'):
@@ -67,9 +84,6 @@ def _test_provider(runtime,p):
     return False,'All saved keys failed: '+', '.join(errors[:6])
 
 def register(bot,runtime):
-    # Do NOT register a catch-all group message handler here. In pyTelegramBotAPI
-    # the first matching handler can consume the update and prevent the AI handler
-    # from running. Group discovery is handled by my_chat_member and the archive.
     @bot.callback_query_handler(func=lambda c: bool(c.data) and c.data.startswith('owner:'))
     def owner_callback(c):
         if not is_owner(getattr(c.from_user,'id',None)):
@@ -82,7 +96,7 @@ def register(bot,runtime):
             if d in ('owner:chats','owner:chats_refresh'):
                 chats=_refresh_chat_names(bot,runtime.db)
                 kb=chat_menu(chats,_selected(runtime.db))
-                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🎯 Choose Chat\n\nGroups are detected automatically.\nNames are refreshed from Telegram.',reply_markup=kb); return
+                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🎯 Choose Chat\n\nGroups are detected automatically.\nOnly groups where Merva is currently a member are shown.',reply_markup=kb); return
             if d.startswith('owner:chat:'):
                 cid=int(d.split(':')[-1]); s=_state(runtime.db); s['selected_chat_id']=cid; _save(runtime.db,s); _set_lab_target(runtime.db,cid)
                 chats=_refresh_chat_names(bot,runtime.db)
