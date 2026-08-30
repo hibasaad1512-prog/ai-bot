@@ -6,10 +6,39 @@ PROVIDERS=['groq','gemini','openai','deepseek','openrouter','together']; WAIT={}
 def _state(db): return db.get_json('chat_settings','chat_id',0,{})
 def _save(db,s): db.save_chat_settings(0,s)
 def _selected(db): return int(_state(db).get('selected_chat_id',0) or 0)
+
 def _chats(db):
-    s=_state(db); known={int(x.get('chat_id')):x for x in s.get('known_chats',[]) if str(x.get('chat_id','')).lstrip('-').isdigit()}
-    for cid in db.list_chat_ids(): known.setdefault(cid,{'chat_id':cid,'title':f'Chat {cid}'})
+    s=_state(db); known={}
+    for x in s.get('known_chats',[]):
+        try:
+            cid=int(x.get('chat_id'))
+        except Exception:
+            continue
+        if cid not in known or x.get('title'):
+            known[cid]={'chat_id':cid,'title':x.get('title'),'username':x.get('username')}
+    for cid in db.list_chat_ids():
+        try: cid=int(cid)
+        except Exception: continue
+        known.setdefault(cid,{'chat_id':cid,'title':None,'username':None})
     return list(known.values())
+
+def _refresh_chat_names(bot,db):
+    chats=_chats(db); changed=False; out=[]
+    for x in chats:
+        cid=int(x['chat_id']); title=x.get('title'); username=x.get('username')
+        try:
+            chat=bot.get_chat(cid)
+            fresh_title=getattr(chat,'title',None) or (getattr(chat,'first_name',None) or getattr(chat,'last_name',None))
+            fresh_username=getattr(chat,'username',None)
+            if fresh_title and fresh_title != title: title=fresh_title; changed=True
+            if fresh_username and fresh_username != username: username=fresh_username; changed=True
+        except Exception:
+            pass
+        out.append({'chat_id':cid,'title':title,'username':username})
+    if changed:
+        s=_state(db); s['known_chats']=out[:200]; _save(db,s)
+    return out
+
 def _back(target='owner:back'):
     k=types.InlineKeyboardMarkup(); k.add(types.InlineKeyboardButton('⬅️ Back',callback_data=target)); return k
 def _set_lab_target(db,cid):
@@ -44,15 +73,26 @@ def register(bot,runtime):
         d=c.data; uid=int(c.from_user.id)
         try:
             bot.answer_callback_query(c.id)
-            if d=='owner:back': bot.edit_message_text('🔐 GOD PANEL',c.message.chat.id,c.message.message_id,reply_markup=menu()); return
-            if d=='owner:chats': bot.edit_message_text('🎯 Choose Chat\n\nGroups are detected automatically.',c.message.chat.id,c.message.message_id,reply_markup=chat_menu(_chats(runtime.db),_selected(runtime.db))); return
+            if d=='owner:exit':
+                try: bot.delete_message(c.message.chat.id,c.message.message_id)
+                except Exception: pass
+                return
+            if d in ('owner:back','owner:menu'):
+                bot.edit_message_text('🔐 GOD PANEL',c.message.chat.id,c.message.message_id,reply_markup=menu()); return
+            if d in ('owner:chats','owner:chats_refresh'):
+                chats=_refresh_chat_names(bot,runtime.db)
+                kb=chat_menu(chats,_selected(runtime.db))
+                # Add a real refresh/exit row without changing the existing chat menu API.
+                kb.add(types.InlineKeyboardButton('🔄 Refresh',callback_data='owner:chats_refresh'),types.InlineKeyboardButton('🚪 Exit',callback_data='owner:exit'))
+                bot.edit_message_text('🎯 Choose Chat\n\nGroups are detected automatically.\nNames are refreshed from Telegram.',c.message.chat.id,c.message.message_id,reply_markup=kb); return
             if d.startswith('owner:chat:'):
                 cid=int(d.split(':')[-1]); s=_state(runtime.db); s['selected_chat_id']=cid; _save(runtime.db,s); _set_lab_target(runtime.db,cid)
-                title=next((x.get('title') for x in _chats(runtime.db) if int(x['chat_id'])==cid),f'Chat {cid}')
+                chats=_refresh_chat_names(bot,runtime.db)
+                title=next((x.get('title') for x in chats if int(x['chat_id'])==cid),None) or f'Chat {cid}'
                 bot.edit_message_text(f'🎯 Selected: {title}',c.message.chat.id,c.message.message_id,reply_markup=menu()); return
-            if d=='owner:providers': bot.edit_message_text('🔑 AI Providers\n\nKeys are stored persistently in the database. Removing the bot from the app does not delete them or stop saved automation.',c.message.chat.id,c.message.message_id,reply_markup=provider_menu(PROVIDERS)); return
+            if d=='owner:providers': bot.edit_message_text('🔑 AI Providers\n\nKeys are stored persistently in the database. They are masked in the admin UI and are never echoed after entry.',c.message.chat.id,c.message.message_id,reply_markup=provider_menu(PROVIDERS)); return
             if d.startswith('owner:provider:'):
-                p=d.split(':')[-1]; bot.edit_message_text(f'🔑 {p.title()}\n\nSaved keys: {len(runtime.ai.provider_keys(p))}\n\nKeys survive restarts.',c.message.chat.id,c.message.message_id,reply_markup=provider_actions(p)); return
+                p=d.split(':')[-1]; bot.edit_message_text(f'🔑 {p.title()}\n\nSaved keys: {len(runtime.ai.provider_keys(p))}\n\nKeys survive restarts and are masked in the UI.',c.message.chat.id,c.message.message_id,reply_markup=provider_actions(p)); return
             if d.startswith('owner:padd:'):
                 p=d.split(':')[-1]; WAIT[uid]=('add',p); bot.edit_message_text(f'➕ Add {p.title()} API key\n\nSend the key here. It is stored in the database and never echoed.\n\nIt will be tested immediately.',c.message.chat.id,c.message.message_id,reply_markup=_back(f'owner:provider:{p}')); return
             if d.startswith('owner:plist:'):
