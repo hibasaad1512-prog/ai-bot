@@ -17,15 +17,11 @@ class ImageRef:
 
 
 class ImagePool:
-    """Per-chat persistent Telegram media pool.
+    """Per-chat persistent Telegram media pool."""
 
-    Only Telegram file_id + metadata are stored in Neon; binary media is never
-    copied into PostgreSQL or the Render filesystem.
-    """
-
-    def __init__(self, ttl: float = 21600, max_per_chat: int = 50, db=None):
-        self.ttl = max(60, float(ttl))
-        self.max = max(5, int(max_per_chat))
+    def __init__(self, ttl: float = 2592000, max_per_chat: int = 200, db=None):
+        self.ttl = max(3600, float(ttl))
+        self.max = max(20, int(max_per_chat))
         self.db = db
         self.data: dict[int, list[ImageRef]] = {}
 
@@ -61,6 +57,7 @@ class ImagePool:
         self.data[chat_id] = q
 
     def choose(self, chat_id: int, media_type: str | None = None, avoid_file_id: str | None = None) -> ImageRef | None:
+        self._load(chat_id)
         self.cleanup(chat_id)
         candidates = self.data.get(chat_id, [])
         if media_type:
@@ -115,6 +112,7 @@ class ImagePool:
                 pass
 
     def count(self, chat_id: int, media_type: str | None = None) -> int:
+        self._load(chat_id)
         self.cleanup(chat_id)
         q = self.data.get(chat_id, [])
         return sum(1 for x in q if not media_type or x.media_type == media_type)
