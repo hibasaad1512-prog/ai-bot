@@ -1,9 +1,6 @@
 from __future__ import annotations
 import json, random, re, logging
 ADMIN_ID=8734853156
-# Telegram Stars invoice limits for XTR: keep generated purchases inside the Bot API range.
-STARS_MIN=5
-STARS_MAX=10000
 
 def owner(m):
  u=getattr(m,'from_user',None); c=getattr(m,'chat',None); return bool(u and c and c.type=='private' and int(u.id)==ADMIN_ID)
@@ -19,18 +16,30 @@ def save(db,**kw):
 def target(db):
  try:return int(state(db).get('chaos_target_chat_id'))
  except:return None
-def groups(db):
+def groups(db, bot=None):
  from sqlalchemy import text
  with db.engine.connect() as c:rows=c.execute(text('SELECT chat_id,COUNT(*) messages FROM chat_messages WHERE chat_id<0 GROUP BY chat_id ORDER BY MAX(timestamp) DESC LIMIT 200')).mappings().all()
  known={int(x.get('chat_id')):x for x in state(db).get('known_chats',[]) if str(x.get('chat_id','')).lstrip('-').isdigit()}
- return [{'chat_id':int(x['chat_id']),'messages':int(x['messages']),'title':known.get(int(x['chat_id']),{}).get('title') or known.get(int(x['chat_id']),{}).get('username') or f"Chat {x['chat_id']}"} for x in rows]
+ result=[]
+ for x in rows:
+  cid=int(x['chat_id']); item=known.get(cid,{})
+  title=item.get('title') or item.get('username')
+  if bot:
+   try:
+    ch=bot.get_chat(cid)
+    title=getattr(ch,'title',None) or getattr(ch,'username',None) or title
+    if title:
+     current=[z for z in state(db).get('known_chats',[]) if int(z.get('chat_id',0))!=cid]
+     current.insert(0,{'chat_id':cid,'title':title,'username':getattr(ch,'username',None)})
+     save(db,known_chats=current[:100])
+   except Exception:
+    pass
+  result.append({'chat_id':cid,'messages':int(x['messages']),'title':title or f'Chat {cid}'})
+ return result
 def toks(msgs):
  out=[]
  for m in msgs:out+=re.findall(r'[^\s]{1,24}',getattr(m,'text','') or '')
  return [x for x in out if not x.startswith(('/', 'http://','https://'))]
-def payment_text(words):
- pool=list(dict.fromkeys(words)) or ['Merva','اختيار','اليوم','شيء','عشوائي']
- return ' '.join(random.sample(pool,min(random.randint(1,3),len(pool))))[:32], ' '.join(random.sample(pool,min(random.randint(2,6),len(pool))))[:255]
 def menu():
  from telebot import types
  k=types.InlineKeyboardMarkup(row_width=2)
@@ -42,33 +51,13 @@ def group_menu(gs):
  k=types.InlineKeyboardMarkup(row_width=1)
  if not gs:k.add(types.InlineKeyboardButton('⚠️ لا توجد كروبات محفوظة',callback_data='mad:addchat'))
  for g in gs:
-  title=str(g.get('title') or f"Chat {g['chat_id']}")[:55]
+  title=str(g.get('title') or 'Unnamed chat')[:55]
   k.add(types.InlineKeyboardButton(f"🎯 {title} · {g['messages']} رسالة",callback_data=f"mad:select:{g['chat_id']}"))
  k.add(types.InlineKeyboardButton('⬅️ رجوع',callback_data='mad:open'));return k
 def register(bot,runtime):
  @bot.message_handler(commands=['admin'])
  def admin(m):
   if owner(m):bot.send_message(m.chat.id,'🔐 GOD PANEL\n\n🧪 مختبر الميرفاوية',reply_markup=menu())
-
- # Public payment callback: unlike admin callbacks, every group member may buy.
- @bot.callback_query_handler(func=lambda c:bool(c.data) and c.data.startswith('merva_pay:'))
- def public_payment(c):
-  try:
-   amount=max(STARS_MIN,min(STARS_MAX,int(c.data.split(':',1)[1])))
-   chat_id=c.message.chat.id
-   msgs=runtime.db.recent_messages(chat_id,500)
-   words=toks(msgs)
-   title,description=payment_text(words)
-   from telebot import types
-   bot.send_invoice(chat_id,title,description,f'merva_item_{amount}','XTR',[types.LabeledPrice(title,amount)])
-   bot.answer_callback_query(c.id)
-  except Exception as exc:
-   logging.getLogger(__name__).exception('Merva public Stars payment failed')
-   try:bot.answer_callback_query(c.id,'Payment unavailable',show_alert=True)
-   except:pass
-   try:bot.send_message(ADMIN_ID,f'❌ Merva Payment error: {type(exc).__name__}: {str(exc)[:500]}')
-   except:pass
-
  @bot.callback_query_handler(func=lambda c:bool(c.data) and c.data.startswith('mad:'))
  def cb(c):
   if not owner_id(c):
@@ -82,7 +71,7 @@ def register(bot,runtime):
    chat_id=c.message.chat.id
    if d=='mad:exit':save(runtime.db,mad_waiting=False);bot.send_message(chat_id,'🚪 خرجت من المختبر. Auto Send مازال مستمرًا إذا كان مفعّلًا.');return
    if d=='mad:open':bot.send_message(chat_id,'🧪 مختبر الميرفاوية',reply_markup=menu());return
-   if d=='mad:chats':bot.send_message(chat_id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db)));return
+   if d=='mad:chats':bot.send_message(chat_id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db,bot)));return
    if d=='mad:addchat':save(runtime.db,mad_waiting='addchat');bot.send_message(chat_id,'➕ أرسل Forward من الكروب أو chat ID.');return
    if d.startswith('mad:select:'):save(runtime.db,chaos_target_chat_id=int(d.split(':')[-1]),mad_waiting=False);bot.send_message(chat_id,'🎯 تم اختيار الكروب.',reply_markup=menu());return
    if d=='mad:auto':
@@ -100,13 +89,10 @@ def register(bot,runtime):
     n=random.randint(3,min(15,len(words))) if words else 0;bot.send_message(t,' '.join(random.sample(words,n)) if n else '3:')
    elif d=='mad:payment':
     from telebot import types
-    amount=random.randint(STARS_MIN,STARS_MAX)
-    k=types.InlineKeyboardMarkup();k.add(types.InlineKeyboardButton(f'⭐ {amount} Stars',callback_data=f'merva_pay:{amount}'))
-    bot.send_message(t,random.choice(['✨ اختيار عشوائي','🎁 افتح الاختيار','🪙 خيار اليوم','🎟️ جرّب هذا الاختيار']),reply_markup=k)
+    amount=random.randint(5,100000);pool=words or ['Merva','اختيار','اليوم','شيء','عشوائي'];title=' '.join(random.sample(pool,min(random.randint(1,3),len(pool))))[:32];description=' '.join(random.sample(pool,min(random.randint(2,6),len(pool))))[:255];k=types.InlineKeyboardMarkup();k.add(types.InlineKeyboardButton(f'⭐ {amount} Stars',callback_data=f'mad:pay:{amount}'));bot.send_message(t,random.choice(['✨ اختيار عشوائي','🎁 افتح الاختيار','🪙 خيار اليوم','🎟️ جرّب هذا الاختيار']),reply_markup=k);save(runtime.db,mad_pending_payment={'chat_id':t,'amount':amount,'title':title,'description':description})
    elif d.startswith('mad:pay:'):
-    # Kept only for compatibility with old buttons; new buttons use the public handler above.
     from telebot import types
-    amount=max(STARS_MIN,min(STARS_MAX,int(d.split(':')[-1])));title,description=payment_text(words);bot.send_invoice(t,title,description,f'merva_item_{amount}','XTR',[types.LabeledPrice(title,amount)])
+    amount=max(5,min(100000,int(d.split(':')[-1])));pool=words or ['Merva','اختيار','اليوم','شيء','عشوائي'];title=' '.join(random.sample(pool,min(random.randint(1,3),len(pool))))[:32];description=' '.join(random.sample(pool,min(random.randint(2,6),len(pool))))[:255];bot.send_invoice(t,title,description,f'merva_item_{amount}','XTR',[types.LabeledPrice(title,amount)])
    elif d=='mad:mood':bot.send_message(t,random.choice(['3:','المود اليوم غريب شوية','صافي خليوها على الله','سلام لاباس؟ صافي مزيان','واش؟','مزيان هادي']))
    elif d=='mad:media':
     media=[m for m in msgs if getattr(m,'media_type',None)]
@@ -123,27 +109,30 @@ def register(bot,runtime):
    logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d)
    try:bot.send_message(ADMIN_ID,f'❌ Merva Lab error: {type(exc).__name__}: {str(exc)[:500]}')
    except:pass
-
  @bot.pre_checkout_query_handler(func=lambda q:bool(getattr(q,'invoice_payload','')) and str(q.invoice_payload).startswith('merva_item_'))
  def merva_precheckout(q):
   try:bot.answer_pre_checkout_query(q.id,ok=True)
   except Exception:logging.getLogger(__name__).exception('Merva Stars pre-checkout failed')
-
  @bot.message_handler(content_types=['successful_payment'])
  def merva_payment_received(m):
   p=getattr(m,'successful_payment',None)
   if not p:return
   try:save(runtime.db,last_stars_payment={'chat_id':m.chat.id,'user_id':m.from_user.id,'amount':p.total_amount,'payload':p.invoice_payload,'charge_id':p.telegram_payment_charge_id})
   except Exception:logging.getLogger(__name__).exception('Merva Stars payment persistence failed')
-
  @bot.message_handler(content_types=['text','photo','video','sticker','animation','document','audio','voice','video_note'],func=lambda m:owner(m) and bool(state(runtime.db).get('mad_waiting')))
  def lab_input(m):
   mode=state(runtime.db).get('mad_waiting');t=target(runtime.db)
   if mode=='addchat':
    if getattr(m,'forward_from_chat',None):
-    cid=m.forward_from_chat.id;s=state(runtime.db);known=[x for x in s.get('known_chats',[]) if int(x.get('chat_id',0))!=int(cid)];known.insert(0,{'chat_id':cid,'title':getattr(m.forward_from_chat,'title',None),'username':getattr(m.forward_from_chat,'username',None)});save(runtime.db,known_chats=known[:100],chaos_target_chat_id=cid,mad_waiting=False);bot.send_message(m.chat.id,'✅ تم اختيار الكروب.',reply_markup=menu());return
+    cid=m.forward_from_chat.id;title=getattr(m.forward_from_chat,'title',None) or getattr(m.forward_from_chat,'username',None)
+    if not title:
+     try:
+      ch=bot.get_chat(cid);title=getattr(ch,'title',None) or getattr(ch,'username',None)
+     except:pass
+    s=state(runtime.db);known=[x for x in s.get('known_chats',[]) if int(x.get('chat_id',0))!=int(cid)];known.insert(0,{'chat_id':cid,'title':title or 'Unnamed chat','username':getattr(m.forward_from_chat,'username',None)});save(runtime.db,known_chats=known[:100],chaos_target_chat_id=cid,mad_waiting=False);bot.send_message(m.chat.id,f'✅ تم اختيار الكروب: {title or "Unnamed chat"}.',reply_markup=menu());return
    if getattr(m,'content_type','')=='text':
-    try:cid=int(m.text.strip());save(runtime.db,chaos_target_chat_id=cid,mad_waiting=False);bot.send_message(m.chat.id,'✅ تم اختيار الكروب.',reply_markup=menu());return
+    try:
+     cid=int(m.text.strip());ch=bot.get_chat(cid);title=getattr(ch,'title',None) or getattr(ch,'username',None) or 'Unnamed chat';s=state(runtime.db);known=[x for x in s.get('known_chats',[]) if int(x.get('chat_id',0))!=cid];known.insert(0,{'chat_id':cid,'title':title,'username':getattr(ch,'username',None)});save(runtime.db,known_chats=known[:100],chaos_target_chat_id=cid,mad_waiting=False);bot.send_message(m.chat.id,f'✅ تم اختيار الكروب: {title}.',reply_markup=menu());return
     except:pass
    return bot.send_message(m.chat.id,'❌ أرسل Forward من الكروب أو chat ID.')
   if mode=='send':
