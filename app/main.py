@@ -10,6 +10,12 @@ import telebot
 
 from app.config import settings
 from app.telegram.bot import KyoosBot
+from app.ai.fast_patch import install as install_fast_groq
+
+# Install before the first Runtime/KyoosBot instance is created.
+# The patch keeps the provider lock away from the network call, allowing
+# multiple Telegram messages to be answered concurrently.
+install_fast_groq()
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level, logging.INFO),
