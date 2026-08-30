@@ -30,14 +30,12 @@ def groups(db,bot=None):
  from sqlalchemy import text
  rows=[]
  with db.engine.connect() as c:
-  try:
-   rows=c.execute(text('SELECT chat_id,COUNT(*) messages,MAX(timestamp) last_seen FROM chat_messages WHERE chat_id<0 GROUP BY chat_id ORDER BY last_seen DESC LIMIT 200')).mappings().all()
+  try: rows=c.execute(text('SELECT chat_id,COUNT(*) messages,MAX(timestamp) last_seen FROM chat_messages WHERE chat_id<0 GROUP BY chat_id ORDER BY last_seen DESC LIMIT 200')).mappings().all()
   except Exception: rows=[]
  known={int(x.get('chat_id')):x for x in state(db).get('known_chats',[]) if str(x.get('chat_id','')).lstrip('-').isdigit()}
  by_id={int(x['chat_id']):dict(x) for x in rows}
  try:
-  with db.engine.connect() as c:
-   extra=c.execute(text("SELECT chat_id,title,username FROM telegram_chats WHERE chat_id<0 ORDER BY last_seen DESC LIMIT 200")).mappings().all()
+  with db.engine.connect() as c: extra=c.execute(text("SELECT chat_id,title,username FROM telegram_chats WHERE chat_id<0 ORDER BY last_seen DESC LIMIT 200")).mappings().all()
   for x in extra:
    cid=int(x['chat_id']); by_id.setdefault(cid,{'chat_id':cid,'messages':0,'last_seen':0})
    if x.get('title'): known.setdefault(cid,{})['title']=x['title']
@@ -49,8 +47,7 @@ def groups(db,bot=None):
   title=item.get('title') or item.get('username')
   if bot:
    try:
-    ch=bot.get_chat(cid)
-    title=getattr(ch,'title',None) or getattr(ch,'username',None) or title
+    ch=bot.get_chat(cid); title=getattr(ch,'title',None) or getattr(ch,'username',None) or title
     if title:
      current=[z for z in state(db).get('known_chats',[]) if int(z.get('chat_id',0))!=cid]
      current.insert(0,{'chat_id':cid,'title':title,'username':getattr(ch,'username',None)})
@@ -61,13 +58,13 @@ def groups(db,bot=None):
 
 def toks(msgs):
  out=[]
- for m in msgs:out+=re.findall(r'[^\s]{1,24}',getattr(m,'text','') or '')
+ for m in msgs: out+=re.findall(r'[^\s]{1,24}',getattr(m,'text','') or '')
  return [x for x in out if not x.startswith(('/', 'http://','https://'))]
 
 def menu():
  from telebot import types
  k=types.InlineKeyboardMarkup(row_width=2)
- items=[('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط','mad:remix'),('🗳️ استطلاع عشوائي','mad:poll'),('💳 Payment','mad:payment'),('🎭 مود','mad:mood'),('🖼️ وسائط عشوائية','mad:media'),('📊 الحالة','mad:status'),('⚙️ Auto Send','mad:auto'),('🔥 Auto+','mad:autoplus'),('⚙️ تخصيص العشوائية','mad:custom')]
+ items=[('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط','mad:remix'),('🗳️ استطلاع عشوائي','mad:poll'),('🎭 مود','mad:mood'),('🖼️ وسائط عشوائية','mad:media'),('📊 الحالة','mad:status'),('⚙️ Auto Send','mad:auto'),('🔥 Auto+','mad:autoplus'),('⚙️ تخصيص العشوائية','mad:custom')]
  for a,b in items:k.add(types.InlineKeyboardButton(a,callback_data=b))
  return k
 
@@ -117,12 +114,6 @@ def register(bot,runtime):
    if d=='mad:random' and msgs:bot.copy_message(t,t,random.choice(msgs).message_id)
    elif d=='mad:remix':
     n=random.randint(3,min(15,len(words))) if words else 0;bot.send_message(t,' '.join(random.sample(words,n)) if n else '3:')
-   elif d=='mad:payment':
-    from telebot import types
-    amount=random.randint(5,100000);pool=words or ['Merva','اختيار','اليوم','شيء','عشوائي'];title=' '.join(random.sample(pool,min(random.randint(1,3),len(pool))))[:32];description=' '.join(random.sample(pool,min(random.randint(2,6),len(pool))))[:255];k=types.InlineKeyboardMarkup();k.add(types.InlineKeyboardButton(f'⭐ {amount} Stars',callback_data=f'mad:pay:{amount}'));bot.send_message(t,random.choice(['✨ اختيار عشوائي','🎁 افتح الاختيار','🪙 خيار اليوم','🎟️ جرّب هذا الاختيار']),reply_markup=k);save(runtime.db,mad_pending_payment={'chat_id':t,'amount':amount,'title':title,'description':description})
-   elif d.startswith('mad:pay:'):
-    from telebot import types
-    amount=max(5,min(100000,int(d.split(':')[-1])));pool=words or ['Merva','اختيار','اليوم','شيء','عشوائي'];title=' '.join(random.sample(pool,min(random.randint(1,3),len(pool))))[:32];description=' '.join(random.sample(pool,min(random.randint(2,6),len(pool))))[:255];bot.send_invoice(t,title,description,f'merva_item_{amount}','XTR',[types.LabeledPrice(title,amount)])
    elif d=='mad:mood':bot.send_message(t,random.choice(['3:','المود اليوم غريب شوية','صافي خليوها على الله','سلام لاباس؟ صافي مزيان','واش؟','مزيان هادي']))
    elif d=='mad:media':
     media=[m for m in msgs if getattr(m,'media_type',None)]
@@ -139,16 +130,6 @@ def register(bot,runtime):
    logging.getLogger(__name__).exception('Merva Lab callback failed: %s',d)
    try:bot.send_message(ADMIN_ID,f'❌ Merva Lab error: {type(exc).__name__}: {str(exc)[:500]}')
    except:pass
- @bot.pre_checkout_query_handler(func=lambda q:bool(getattr(q,'invoice_payload','')) and str(q.invoice_payload).startswith('merva_item_'))
- def merva_precheckout(q):
-  try:bot.answer_pre_checkout_query(q.id,ok=True)
-  except Exception:logging.getLogger(__name__).exception('Merva Stars pre-checkout failed')
- @bot.message_handler(content_types=['successful_payment'])
- def merva_payment_received(m):
-  p=getattr(m,'successful_payment',None)
-  if not p:return
-  try:save(runtime.db,last_stars_payment={'chat_id':m.chat.id,'user_id':m.from_user.id,'amount':p.total_amount,'payload':p.invoice_payload,'charge_id':p.telegram_payment_charge_id})
-  except Exception:logging.getLogger(__name__).exception('Merva Stars payment persistence failed')
  @bot.message_handler(content_types=['text','photo','video','sticker','animation','document','audio','voice','video_note'],func=lambda m:owner(m) and bool(state(runtime.db).get('mad_waiting')))
  def lab_input(m):
   mode=state(runtime.db).get('mad_waiting');t=target(runtime.db)
@@ -156,8 +137,7 @@ def register(bot,runtime):
    if getattr(m,'forward_from_chat',None):
     cid=m.forward_from_chat.id;title=getattr(m.forward_from_chat,'title',None) or getattr(m.forward_from_chat,'username',None)
     if not title:
-     try:
-      ch=bot.get_chat(cid);title=getattr(ch,'title',None) or getattr(ch,'username',None)
+     try: ch=bot.get_chat(cid);title=getattr(ch,'title',None) or getattr(ch,'username',None)
      except:pass
     s=state(runtime.db);known=[x for x in s.get('known_chats',[]) if int(x.get('chat_id',0))!=int(cid)];known.insert(0,{'chat_id':cid,'title':title or 'Unnamed chat','username':getattr(m.forward_from_chat,'username',None)});save(runtime.db,known_chats=known[:100],chaos_target_chat_id=cid,mad_waiting=False);bot.send_message(m.chat.id,f'✅ تم اختيار الكروب: {title or "Unnamed chat"}.',reply_markup=menu());return
    if getattr(m,'content_type','')=='text':
