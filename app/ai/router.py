@@ -19,7 +19,7 @@ class OpenAICompatibleProvider(AIProvider):
   if not choices: raise RuntimeError(f'{self.name}: empty response')
   return data
  def _messages(self,prompt,system): return ([{'role':'system','content':system}] if system else [])+[{'role':'user','content':prompt}]
- def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=0.65)['choices'][0]['message'].get('content','')).strip()
+ def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=0.55)['choices'][0]['message'].get('content','')).strip()
  def generate_structured(self,prompt,schema,system=None): return json.loads(self._request(self._messages(prompt,system),temperature=0,response_format={'type':'json_object'})['choices'][0]['message'].get('content','{}'))
  def analyze_image(self,image_bytes,prompt):
   b64=base64.b64encode(image_bytes).decode(); msg=[{'role':'user','content':[{'type':'text','text':prompt},{'type':'image_url','image_url':{'url':f'data:image/jpeg;base64,{b64}'}}]}]; return str(self._request(msg,temperature=0)['choices'][0]['message'].get('content','')).strip()
@@ -85,21 +85,16 @@ class MultiProvider(AIProvider):
  def _try(self,method,*args,**kwargs):
   self.refresh(); now=time.time(); candidates=[n for n in self.order if self.providers.get(n) and getattr(self.providers.get(n),'enabled',False) and self._cooldown.get(n,0)<=now]
   random.shuffle(candidates)
-  # Prefer a healthy Groq key only when it is available; otherwise use a randomized healthy pool.
-  if 'groq' in candidates:
-   candidates.remove('groq'); candidates.insert(0,'groq')
   errors=[]
   for name in candidates:
-   p=self.providers.get(name)
    try:
-    r=getattr(p,method)(*args,**kwargs)
+    r=getattr(self.providers[name],method)(*args,**kwargs)
     if isinstance(r,str): r=r.strip()
     if r:
      self._cooldown.pop(name,None); return r
     errors.append(f'{name}:empty_response'); self._mark_failure(name,RuntimeError('empty response'))
    except Exception as e:
     errors.append(f'{name}:{type(e).__name__}:{str(e)[:120]}'); self._mark_failure(name,e); log.warning('AI provider %s failed; trying another provider/key',name)
-  # If every candidate is on cooldown, make one randomized retry rather than silently failing.
   if not candidates:
    all_enabled=[n for n in self.order if self.providers.get(n) and getattr(self.providers.get(n),'enabled',False)]
    random.shuffle(all_enabled)
