@@ -11,7 +11,10 @@ class OpenAICompatibleProvider(AIProvider):
  def enabled(self): return bool(self.api_key and self.model)
  def _request(self,messages,**extra):
   if not self.enabled: raise RuntimeError(f'{self.name} is not configured')
-  r=requests.post(f'{self.base_url}/chat/completions',headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'},json={'model':self.model,'messages':messages,**extra},timeout=45); r.raise_for_status(); return r.json()
+  r=requests.post(f'{self.base_url}/chat/completions',headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'},json={'model':self.model,'messages':messages,**extra},timeout=45)
+  r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
+  if not choices: raise RuntimeError(f'{self.name}: empty response')
+  return data
  def _messages(self,prompt,system): return ([{'role':'system','content':system}] if system else [])+[{'role':'user','content':prompt}]
  def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=1.0)['choices'][0]['message'].get('content','')).strip()
  def generate_structured(self,prompt,schema,system=None): return json.loads(self._request(self._messages(prompt,system),temperature=0,response_format={'type':'json_object'})['choices'][0]['message'].get('content','{}'))
@@ -35,11 +38,13 @@ class MultiProvider(AIProvider):
   if envg and envg not in gkeys:gkeys.append(envg)
   for i,key in enumerate(gkeys): self.providers[f'gemini:{i+1}']=GeminiProvider(key)
   bases=[x.strip().lower() for x in os.getenv('AI_PROVIDER_ORDER','groq,gemini,openai,deepseek,openrouter,together').split(',') if x.strip()]
-  for base in bases:self.order.append('groq') if base=='groq' else self.order.extend([k for k in self.providers if k.startswith(base+':')])
+  for base in bases:
+   if base=='groq': self.order.append('groq')
+   else: self.order.extend([k for k in self.providers if k.startswith(base+':')])
   for k in self.providers:
    if k not in self.order:self.order.append(k)
  @property
- def enabled(self): return any(getattr(self.providers.get(n),'enabled',False) for n in self.order)
+ def enabled(self): self.refresh(); return any(getattr(self.providers.get(n),'enabled',False) for n in self.order)
  @property
  def keys(self): return self.groq.keys
  @property
@@ -50,7 +55,7 @@ class MultiProvider(AIProvider):
  def add_key(self,key): return self.groq.add_key(key)
  def delete_key(self,index): return self.groq.delete_key(index)
  def provider_names(self): return ['groq','gemini','openai','deepseek','openrouter','together']
- def provider_keys(self,provider): return list(self._keys().get(provider,[]))
+ def provider_keys(self,provider): self.refresh(); return list(self._keys().get(provider,[]))
  def add_provider_key(self,provider,key):
   provider=provider.lower().strip(); key=key.strip()
   if provider not in self.provider_names() or not key:return False,'invalid'
@@ -64,26 +69,30 @@ class MultiProvider(AIProvider):
   s=self._state(); data=dict(s.get('ai_keys',{})); arr=list(data.get(provider,[]))
   if index<0 or index>=len(arr):return False,'invalid_index'
   arr.pop(index); data[provider]=arr; s['ai_keys']=data; self.db.save_chat_settings(0,s); self.refresh(); return True,'deleted'
- def provider_status(self): return [(n,bool(getattr(self.providers.get(n),'enabled',False))) for n in self.order]
+ def provider_status(self): self.refresh(); return [(n,bool(getattr(self.providers.get(n),'enabled',False))) for n in self.order]
  def _try(self,method,*args,**kwargs):
-  errors=[]
+  self.refresh(); errors=[]
   for name in self.order:
    p=self.providers.get(name)
    if not p or not getattr(p,'enabled',False):continue
    try:
     r=getattr(p,method)(*args,**kwargs)
     if r:return r
-   except Exception as e: errors.append(f'{name}:{type(e).__name__}'); log.warning('AI provider %s failed; trying next',name)
+    errors.append(f'{name}:empty_response')
+   except Exception as e:
+    errors.append(f'{name}:{type(e).__name__}:{str(e)[:120]}')
+    log.warning('AI provider %s failed; trying next',name)
   raise RuntimeError('All configured AI providers failed: '+', '.join(errors))
  def generate_text(self,prompt,system=None): return self._try('generate_text',prompt,system)
  def generate_structured(self,prompt,schema,system=None): return self._try('generate_structured',prompt,schema,system)
  def analyze_image(self,image_bytes,prompt): return self._try('analyze_image',image_bytes,prompt)
  def generate_image(self,prompt):
+  self.refresh()
   for name in self.order:
    p=self.providers.get(name)
    if p and getattr(p,'enabled',False):
     try:
      r=p.generate_image(prompt)
      if r:return r
-    except Exception: pass
+    except Exception: log.warning('AI image provider %s failed',name)
   return None
