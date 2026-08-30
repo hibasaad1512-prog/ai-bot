@@ -21,7 +21,7 @@ class GeminiProvider(AIProvider):
     def _call(self,prompt:str,system:str|None=None,structured:bool=False):
         if not self.client: raise RuntimeError('Gemini is not configured')
         from google.genai import types
-        config=types.GenerateContentConfig(system_instruction=system or '',temperature=1.0,max_output_tokens=500)
+        config=types.GenerateContentConfig(system_instruction=system or '',temperature=0.65,max_output_tokens=500)
         if structured:
             config.response_mime_type='application/json'; config.response_schema=DECISION_SCHEMA
         return self.client.models.generate_content(model=self.model,contents=prompt,config=config)
@@ -30,7 +30,7 @@ class GeminiProvider(AIProvider):
     def analyze_image(self,image_bytes:bytes,prompt:str)->str:
         if not self.client: raise RuntimeError('Gemini is not configured')
         from google.genai import types
-        r=self.client.models.generate_content(model=self.model,contents=[prompt,types.Part.from_bytes(data=image_bytes,mime_type='image/jpeg')],config=types.GenerateContentConfig(max_output_tokens=400))
+        r=self.client.models.generate_content(model=self.model,contents=[prompt,types.Part.from_bytes(data=image_bytes,mime_type='image/jpeg')],config=types.GenerateContentConfig(max_output_tokens=400,temperature=0.2))
         return (getattr(r,'text','') or '').strip()
     def generate_image(self,prompt:str)->bytes|None:
         if not self.client:return None
