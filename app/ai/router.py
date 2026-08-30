@@ -14,18 +14,17 @@ class OpenAICompatibleProvider(AIProvider):
   headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}
   if self.name=='openrouter': headers.update({'HTTP-Referer':os.getenv('OPENROUTER_HTTP_REFERER','https://localhost'),'X-Title':os.getenv('OPENROUTER_APP_NAME','Merva AI')})
   payload={'model':self.model,'messages':messages,'max_tokens':160,**extra}
-  r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json=payload,timeout=(1.5,4.5))
-  r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
+  r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json=payload,timeout=(1.2,3.8)); r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
   if not choices: raise RuntimeError(f'{self.name}: empty response')
   return data
  def _messages(self,prompt,system): return ([{'role':'system','content':system}] if system else [])+[{'role':'user','content':prompt}]
- def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=0.45)['choices'][0]['message'].get('content','')).strip()
+ def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=0.35)['choices'][0]['message'].get('content','')).strip()
  def generate_structured(self,prompt,schema,system=None): return json.loads(self._request(self._messages(prompt,system),temperature=0,response_format={'type':'json_object'})['choices'][0]['message'].get('content','{}'))
  def analyze_image(self,image_bytes,prompt):
   b64=base64.b64encode(image_bytes).decode(); msg=[{'role':'user','content':[{'type':'text','text':prompt},{'type':'image_url','image_url':{'url':f'data:image/jpeg;base64,{b64}'}}]}]; return str(self._request(msg,temperature=0)['choices'][0]['message'].get('content','')).strip()
  def generate_image(self,prompt): return None
 class MultiProvider(AIProvider):
- def __init__(self,db): self.db=db; self.groq=GroqProvider(db); self.providers={}; self.order=[]; self._cooldown={}; self._latency={}; self._lock=threading.RLock(); self._last_refresh=0; self._refresh_ttl=30; self.refresh(force=True)
+ def __init__(self,db): self.db=db; self.groq=GroqProvider(db); self.providers={}; self.order=[]; self._cooldown={}; self._latency={}; self._lock=threading.RLock(); self._last_refresh=0; self._refresh_ttl=60; self.refresh(force=True)
  def _state(self):
   try:return self.db.get_json('chat_settings','chat_id',0,{})
   except:return {}
@@ -83,26 +82,23 @@ class MultiProvider(AIProvider):
   self._cooldown[name]=time.time()+cooldown
  def _try(self,method,*args,**kwargs):
   self.refresh(); now=time.time(); candidates=[n for n in self.order if self.providers.get(n) and getattr(self.providers.get(n),'enabled',False) and self._cooldown.get(n,0)<=now]
-  # Prefer providers that have historically answered fastest, while retaining configured priority for new providers.
   candidates.sort(key=lambda n:(self._latency.get(n,99.0), self.order.index(n)))
   errors=[]
   for name in candidates:
    started=time.monotonic()
    try:
-    r=getattr(self.providers[name],method)(*args,**kwargs)
-    elapsed=time.monotonic()-started; old=self._latency.get(name,elapsed); self._latency[name]=old*0.7+elapsed*0.3
+    r=getattr(self.providers[name],method)(*args,**kwargs); elapsed=time.monotonic()-started; old=self._latency.get(name,elapsed); self._latency[name]=old*0.7+elapsed*0.3
     if isinstance(r,str):r=r.strip()
     if r:return r
     errors.append(f'{name}:empty_response'); self._mark_failure(name,RuntimeError('empty response'))
    except Exception as e:
-    self._latency[name]=min(self._latency.get(name,99.0),time.monotonic()-started)
-    errors.append(f'{name}:{type(e).__name__}:{str(e)[:80]}'); self._mark_failure(name,e); log.warning('AI provider %s failed; fallback engaged',name)
+    self._latency[name]=time.monotonic()-started; errors.append(f'{name}:{type(e).__name__}'); self._mark_failure(name,e); log.warning('AI provider %s failed; fallback engaged',name)
   raise RuntimeError('All configured AI providers/keys failed: '+', '.join(errors) if errors else 'No configured AI providers')
  def generate_text(self,prompt,system=None): return self._try('generate_text',prompt,system)
  def generate_structured(self,prompt,schema,system=None): return self._try('generate_structured',prompt,schema,system)
  def analyze_image(self,image_bytes,prompt): return self._try('analyze_image',image_bytes,prompt)
  def generate_image(self,prompt):
-  self.refresh();
+  self.refresh()
   for name in sorted(self.order,key=lambda n:(self._latency.get(n,99.0),self.order.index(n))):
    if self.providers.get(name) and getattr(self.providers[name],'enabled',False) and self._cooldown.get(name,0)<=time.time():
     try:
