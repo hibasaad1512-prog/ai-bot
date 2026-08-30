@@ -7,7 +7,6 @@ from sqlalchemy import text
 
 from app.models import ChatMessage
 
-
 MAX_MESSAGES_PER_CHAT = 500
 MAX_MEDIA_PER_CHAT = 200
 
@@ -51,10 +50,14 @@ def _install_schema(db) -> None:
             chat_type TEXT NOT NULL DEFAULT '',
             title TEXT NOT NULL DEFAULT '',
             username TEXT NOT NULL DEFAULT '',
+            is_bot_member BOOLEAN NOT NULL DEFAULT TRUE,
             last_seen DOUBLE PRECISION NOT NULL
         )"""))
+        # Safe migration for databases created by older versions.
+        conn.execute(text("ALTER TABLE telegram_chats ADD COLUMN IF NOT EXISTS is_bot_member BOOLEAN NOT NULL DEFAULT TRUE"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_seen ON telegram_users(last_seen DESC)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_chats_seen ON telegram_chats(last_seen DESC)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_chats_member ON telegram_chats(is_bot_member, last_seen DESC)"))
 
 
 def _save_metadata(db, m) -> None:
@@ -70,11 +73,44 @@ def _save_metadata(db, m) -> None:
                 "first": getattr(user, "first_name", "") or "", "last": getattr(user, "last_name", "") or "",
                 "bot": bool(getattr(user, "is_bot", False)), "seen": now})
         if chat:
-            conn.execute(text("""INSERT INTO telegram_chats(chat_id,chat_type,title,username,last_seen)
-                VALUES(:id,:type,:title,:username,:seen)
-                ON CONFLICT(chat_id) DO UPDATE SET chat_type=:type,title=:title,username=:username,last_seen=:seen"""), {
+            title = getattr(chat, "title", "") or ""
+            # Private chats have no title; keep the useful Telegram display name.
+            if not title and getattr(chat, "type", "") == "private" and user:
+                title = _user_name(user)
+            conn.execute(text("""INSERT INTO telegram_chats(chat_id,chat_type,title,username,is_bot_member,last_seen)
+                VALUES(:id,:type,:title,:username,TRUE,:seen)
+                ON CONFLICT(chat_id) DO UPDATE SET chat_type=:type,title=CASE WHEN :title <> '' THEN :title ELSE telegram_chats.title END,
+                    username=CASE WHEN :username <> '' THEN :username ELSE telegram_chats.username END,
+                    is_bot_member=TRUE,last_seen=:seen"""), {
                 "id": int(chat.id), "type": getattr(chat, "type", "") or "",
-                "title": getattr(chat, "title", "") or "", "username": getattr(chat, "username", "") or "", "seen": now})
+                "title": title, "username": getattr(chat, "username", "") or "", "seen": now})
+
+
+def _save_membership(db, update) -> None:
+    chat = getattr(update, "chat", None)
+    new_member = getattr(update, "new_chat_member", None)
+    old_member = getattr(update, "old_chat_member", None)
+    if not chat or getattr(chat, "type", "") not in ("group", "supergroup"):
+        return
+
+    status = getattr(new_member, "status", "") or ""
+    # Telegram sends this update specifically when this bot's membership changes.
+    active = status in ("member", "administrator", "creator")
+    if not status:
+        active = getattr(old_member, "status", "") not in ("kicked", "left")
+
+    now = time.time()
+    title = getattr(chat, "title", "") or ""
+    username = getattr(chat, "username", "") or ""
+    with db.engine.begin() as conn:
+        conn.execute(text("""INSERT INTO telegram_chats(chat_id,chat_type,title,username,is_bot_member,last_seen)
+            VALUES(:id,:type,:title,:username,:active,:seen)
+            ON CONFLICT(chat_id) DO UPDATE SET chat_type=:type,
+                title=CASE WHEN :title <> '' THEN :title ELSE telegram_chats.title END,
+                username=CASE WHEN :username <> '' THEN :username ELSE telegram_chats.username END,
+                is_bot_member=:active,last_seen=:seen"""), {
+            "id": int(chat.id), "type": getattr(chat, "type", "") or "",
+            "title": title, "username": username, "active": active, "seen": now})
 
 
 def _save_message(db, m) -> None:
@@ -103,7 +139,7 @@ def _save_message(db, m) -> None:
             (SELECT message_id FROM chat_messages WHERE chat_id=:chat ORDER BY timestamp DESC LIMIT :limit)"""),
             {"chat": int(m.chat.id), "limit": MAX_MESSAGES_PER_CHAT})
         conn.execute(text("""DELETE FROM media_pool WHERE chat_id=:chat AND telegram_file_id NOT IN
-            (SELECT telegram_file_id FROM media_pool WHERE chat_id=:chat ORDER BY created_at DESC LIMIT :limit)"""),
+            (SELECT telegram_file_id FROM media_pool WHERE chat_id=:chat ORDER BY created_at DESC LIMIT :limit)""),
             {"chat": int(m.chat.id), "limit": MAX_MEDIA_PER_CHAT})
 
 
@@ -113,6 +149,13 @@ def register_smart_archive(bot, runtime) -> None:
     except Exception:
         # Archive must never prevent the bot from starting.
         return
+
+    @bot.my_chat_member_handler()
+    def archive_membership_update(update):
+        try:
+            _save_membership(runtime.db, update)
+        except Exception:
+            return
 
     @bot.message_handler(content_types=["animation", "document", "audio", "voice", "video_note"])
     def archive_extra_media(message):
