@@ -16,13 +16,36 @@ def save(db,**kw):
 def target(db):
  try:return int(state(db).get('chaos_target_chat_id'))
  except:return None
-def groups(db, bot=None):
+
+def _safe_edit(bot,chat_id,message_id,text,reply_markup=None):
+ try:
+  bot.edit_message_text(text,chat_id,message_id,reply_markup=reply_markup)
+  return True
+ except Exception as exc:
+  if 'message is not modified' in str(exc).lower(): return True
+  logging.getLogger(__name__).warning('safe edit failed: %s',exc)
+  return False
+
+def groups(db,bot=None):
  from sqlalchemy import text
- with db.engine.connect() as c:rows=c.execute(text('SELECT chat_id,COUNT(*) messages FROM chat_messages WHERE chat_id<0 GROUP BY chat_id ORDER BY MAX(timestamp) DESC LIMIT 200')).mappings().all()
+ rows=[]
+ with db.engine.connect() as c:
+  try:
+   rows=c.execute(text('SELECT chat_id,COUNT(*) messages,MAX(timestamp) last_seen FROM chat_messages WHERE chat_id<0 GROUP BY chat_id ORDER BY last_seen DESC LIMIT 200')).mappings().all()
+  except Exception: rows=[]
  known={int(x.get('chat_id')):x for x in state(db).get('known_chats',[]) if str(x.get('chat_id','')).lstrip('-').isdigit()}
+ by_id={int(x['chat_id']):dict(x) for x in rows}
+ try:
+  with db.engine.connect() as c:
+   extra=c.execute(text("SELECT chat_id,title,username FROM telegram_chats WHERE chat_id<0 ORDER BY last_seen DESC LIMIT 200")).mappings().all()
+  for x in extra:
+   cid=int(x['chat_id']); by_id.setdefault(cid,{'chat_id':cid,'messages':0,'last_seen':0})
+   if x.get('title'): known.setdefault(cid,{})['title']=x['title']
+   if x.get('username'): known.setdefault(cid,{})['username']=x['username']
+ except Exception: pass
  result=[]
- for x in rows:
-  cid=int(x['chat_id']); item=known.get(cid,{})
+ for cid,x in by_id.items():
+  item=known.get(cid,{})
   title=item.get('title') or item.get('username')
   if bot:
    try:
@@ -32,20 +55,22 @@ def groups(db, bot=None):
      current=[z for z in state(db).get('known_chats',[]) if int(z.get('chat_id',0))!=cid]
      current.insert(0,{'chat_id':cid,'title':title,'username':getattr(ch,'username',None)})
      save(db,known_chats=current[:100])
-   except Exception:
-    pass
-  result.append({'chat_id':cid,'messages':int(x['messages']),'title':title or f'Chat {cid}'})
- return result
+   except Exception: pass
+  result.append({'chat_id':cid,'messages':int(x.get('messages',0)),'title':title or 'Unnamed chat'})
+ return sorted(result,key=lambda x:x['messages'],reverse=True)[:100]
+
 def toks(msgs):
  out=[]
  for m in msgs:out+=re.findall(r'[^\s]{1,24}',getattr(m,'text','') or '')
  return [x for x in out if not x.startswith(('/', 'http://','https://'))]
+
 def menu():
  from telebot import types
  k=types.InlineKeyboardMarkup(row_width=2)
  items=[('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط','mad:remix'),('🗳️ استطلاع عشوائي','mad:poll'),('💳 Payment','mad:payment'),('🎭 مود','mad:mood'),('🖼️ وسائط عشوائية','mad:media'),('📊 الحالة','mad:status'),('⚙️ Auto Send','mad:auto'),('🔥 Auto+','mad:autoplus'),('⚙️ تخصيص العشوائية','mad:custom')]
  for a,b in items:k.add(types.InlineKeyboardButton(a,callback_data=b))
- k.add(types.InlineKeyboardButton('🚪 خروج من المختبر',callback_data='mad:exit'));return k
+ return k
+
 def group_menu(gs):
  from telebot import types
  k=types.InlineKeyboardMarkup(row_width=1)
@@ -53,7 +78,10 @@ def group_menu(gs):
  for g in gs:
   title=str(g.get('title') or 'Unnamed chat')[:55]
   k.add(types.InlineKeyboardButton(f"🎯 {title} · {g['messages']} رسالة",callback_data=f"mad:select:{g['chat_id']}"))
- k.add(types.InlineKeyboardButton('⬅️ رجوع',callback_data='mad:open'));return k
+ k.add(types.InlineKeyboardButton('🔄 تحديث الشاتات','mad:refresh'))
+ k.add(types.InlineKeyboardButton('⬅️ رجوع','mad:open'))
+ return k
+
 def register(bot,runtime):
  @bot.message_handler(commands=['admin'])
  def admin(m):
@@ -69,11 +97,13 @@ def register(bot,runtime):
    try:bot.answer_callback_query(c.id)
    except:pass
    chat_id=c.message.chat.id
-   if d=='mad:exit':save(runtime.db,mad_waiting=False);bot.send_message(chat_id,'🚪 خرجت من المختبر. Auto Send مازال مستمرًا إذا كان مفعّلًا.');return
    if d=='mad:open':bot.send_message(chat_id,'🧪 مختبر الميرفاوية',reply_markup=menu());return
-   if d=='mad:chats':bot.send_message(chat_id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db,bot)));return
+   if d in ('mad:chats','mad:refresh'):
+    _safe_edit(bot,chat_id,c.message.message_id,'🎯 اختر الكروب:',group_menu(groups(runtime.db,bot))) or bot.send_message(chat_id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db,bot)))
+    return
    if d=='mad:addchat':save(runtime.db,mad_waiting='addchat');bot.send_message(chat_id,'➕ أرسل Forward من الكروب أو chat ID.');return
-   if d.startswith('mad:select:'):save(runtime.db,chaos_target_chat_id=int(d.split(':')[-1]),mad_waiting=False);bot.send_message(chat_id,'🎯 تم اختيار الكروب.',reply_markup=menu());return
+   if d.startswith('mad:select:'):
+    save(runtime.db,chaos_target_chat_id=int(d.split(':')[-1]),mad_waiting=False);bot.send_message(chat_id,'🎯 تم اختيار الكروب.',reply_markup=menu());return
    if d=='mad:auto':
     enabled=not bool(state(runtime.db).get('mad_auto'));save(runtime.db,mad_auto=enabled);bot.send_message(chat_id,('🤖 Auto Send: ON\n💾 محفوظ في Neon ويستأنف بعد Restart.' if enabled else '🛑 Auto Send: OFF'),reply_markup=menu());return
    if d=='mad:autoplus':
