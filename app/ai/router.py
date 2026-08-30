@@ -1,17 +1,20 @@
 from __future__ import annotations
-import json, logging, os, base64, requests
+import json, logging, os, base64, random, time, threading, requests
 from .base import AIProvider
 from .groq import GroqProvider
 from .gemini import GeminiProvider
 log=logging.getLogger(__name__)
-SPECS={'openai':('OPENAI_BASE_URL','OPENAI_MODEL','https://api.openai.com/v1','gpt-4o-mini'),'deepseek':('DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','https://api.deepseek.com/v1','deepseek-chat'),'openrouter':('OPENROUTER_BASE_URL','OPENROUTER_MODEL','https://openrouter.ai/api/v1','openai/gpt-4o-mini'),'together':('TOGETHER_BASE_URL','TOGETHER_MODEL','https://api.together.xyz/v1','meta-llama/Llama-3.3-70B-Instruct-Turbo')}
+SPECS={'openai':('OPENAI_BASE_URL','OPENAI_MODEL','https://api.openai.com/v1','gpt-4o-mini'),'deepseek':('DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','https://api.deepseek.com/v1','deepseek-chat'),'openrouter':('OPENROUTER_BASE_URL','OPENROUTER_MODEL','https://openrouter.ai/api/v1','openrouter/free'),'together':('TOGETHER_BASE_URL','TOGETHER_MODEL','https://api.together.xyz/v1','meta-llama/Llama-3.3-70B-Instruct-Turbo')}
+
 class OpenAICompatibleProvider(AIProvider):
  def __init__(self,name,api_key,base_url,model): self.name=name; self.api_key=api_key.strip(); self.base_url=base_url.rstrip('/'); self.model=model.strip()
  @property
  def enabled(self): return bool(self.api_key and self.model)
  def _request(self,messages,**extra):
   if not self.enabled: raise RuntimeError(f'{self.name} is not configured')
-  r=requests.post(f'{self.base_url}/chat/completions',headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'},json={'model':self.model,'messages':messages,**extra},timeout=35)
+  headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}
+  if self.name=='openrouter': headers.update({'HTTP-Referer':os.getenv('OPENROUTER_HTTP_REFERER','https://localhost'),'X-Title':os.getenv('OPENROUTER_APP_NAME','Merva AI')})
+  r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json={'model':self.model,'messages':messages,**extra},timeout=35)
   r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
   if not choices: raise RuntimeError(f'{self.name}: empty response')
   return data
@@ -21,28 +24,30 @@ class OpenAICompatibleProvider(AIProvider):
  def analyze_image(self,image_bytes,prompt):
   b64=base64.b64encode(image_bytes).decode(); msg=[{'role':'user','content':[{'type':'text','text':prompt},{'type':'image_url','image_url':{'url':f'data:image/jpeg;base64,{b64}'}}]}]; return str(self._request(msg,temperature=0)['choices'][0]['message'].get('content','')).strip()
  def generate_image(self,prompt): return None
+
 class MultiProvider(AIProvider):
- def __init__(self,db): self.db=db; self.groq=GroqProvider(db); self.providers={}; self.order=[]; self.refresh()
+ def __init__(self,db): self.db=db; self.groq=GroqProvider(db); self.providers={}; self.order=[]; self._cooldown={}; self._lock=threading.RLock(); self.refresh()
  def _state(self):
   try:return self.db.get_json('chat_settings','chat_id',0,{})
   except:return {}
  def _keys(self):
   s=self._state(); data=dict(s.get('ai_keys',{})); data['groq']=list(self.groq.keys); return data
  def refresh(self):
-  self.providers={'groq':self.groq}; self.order=[]; saved=self._keys()
-  for name,(be,me,bd,md) in SPECS.items():
-   keys=list(saved.get(name,[])); env=os.getenv(name.upper()+'_API_KEY','').strip()
-   if env and env not in keys: keys.append(env)
-   for i,key in enumerate(keys): self.providers[f'{name}:{i+1}']=OpenAICompatibleProvider(name,key,os.getenv(be,bd),os.getenv(me,md))
-  gkeys=list(saved.get('gemini',[])); envg=os.getenv('GEMINI_API_KEY','').strip()
-  if envg and envg not in gkeys:gkeys.append(envg)
-  for i,key in enumerate(gkeys): self.providers[f'gemini:{i+1}']=GeminiProvider(key)
-  bases=[x.strip().lower() for x in os.getenv('AI_PROVIDER_ORDER','groq,gemini,openai,deepseek,openrouter,together').split(',') if x.strip()]
-  for base in bases:
-   if base=='groq': self.order.append('groq')
-   else: self.order.extend([k for k in self.providers if k.startswith(base+':')])
-  for k in self.providers:
-   if k not in self.order:self.order.append(k)
+  with self._lock:
+   self.providers={'groq':self.groq}; self.order=[]; saved=self._keys()
+   for name,(be,me,bd,md) in SPECS.items():
+    keys=list(saved.get(name,[])); env=os.getenv(name.upper()+'_API_KEY','').strip()
+    if env and env not in keys: keys.append(env)
+    for i,key in enumerate(keys): self.providers[f'{name}:{i+1}']=OpenAICompatibleProvider(name,key,os.getenv(be,bd),os.getenv(me,md))
+   gkeys=list(saved.get('gemini',[])); envg=os.getenv('GEMINI_API_KEY','').strip()
+   if envg and envg not in gkeys:gkeys.append(envg)
+   for i,key in enumerate(gkeys): self.providers[f'gemini:{i+1}']=GeminiProvider(key)
+   bases=[x.strip().lower() for x in os.getenv('AI_PROVIDER_ORDER','groq,gemini,openrouter,deepseek,openai,together').split(',') if x.strip()]
+   for base in bases:
+    if base=='groq': self.order.append('groq')
+    else: self.order.extend([k for k in self.providers if k.startswith(base+':')])
+   for k in self.providers:
+    if k not in self.order:self.order.append(k)
  @property
  def enabled(self): self.refresh(); return any(getattr(self.providers.get(n),'enabled',False) for n in self.order)
  @property
@@ -70,31 +75,49 @@ class MultiProvider(AIProvider):
   s=self._state(); data=dict(s.get('ai_keys',{})); arr=list(data.get(provider,[]))
   if index<0 or index>=len(arr):return False,'invalid_index'
   arr.pop(index); data[provider]=arr; s['ai_keys']=data; self.db.save_chat_settings(0,s); self.refresh(); return True,'deleted'
- def provider_status(self): self.refresh(); return [(n,bool(getattr(self.providers.get(n),'enabled',False))) for n in self.order]
+ def provider_status(self):
+  self.refresh(); now=time.time(); return [(n,bool(getattr(self.providers.get(n),'enabled',False)) and self._cooldown.get(n,0)<=now) for n in self.order]
+ def _mark_failure(self,name,exc):
+  msg=str(exc).lower(); cooldown=20.0
+  if '429' in msg or 'rate' in msg or 'quota' in msg: cooldown=60.0
+  elif '401' in msg or '403' in msg or 'invalid api key' in msg or 'authentication' in msg: cooldown=900.0
+  self._cooldown[name]=time.time()+cooldown
  def _try(self,method,*args,**kwargs):
-  self.refresh(); errors=[]
-  for name in self.order:
+  self.refresh(); now=time.time(); candidates=[n for n in self.order if self.providers.get(n) and getattr(self.providers.get(n),'enabled',False) and self._cooldown.get(n,0)<=now]
+  random.shuffle(candidates)
+  # Prefer a healthy Groq key only when it is available; otherwise use a randomized healthy pool.
+  if 'groq' in candidates:
+   candidates.remove('groq'); candidates.insert(0,'groq')
+  errors=[]
+  for name in candidates:
    p=self.providers.get(name)
-   if not p or not getattr(p,'enabled',False):continue
    try:
     r=getattr(p,method)(*args,**kwargs)
     if isinstance(r,str): r=r.strip()
-    if r:return r
-    errors.append(f'{name}:empty_response')
+    if r:
+     self._cooldown.pop(name,None); return r
+    errors.append(f'{name}:empty_response'); self._mark_failure(name,RuntimeError('empty response'))
    except Exception as e:
-    errors.append(f'{name}:{type(e).__name__}:{str(e)[:120]}')
-    log.warning('AI provider %s failed; trying next',name)
-  raise RuntimeError('All configured AI providers failed: '+', '.join(errors))
+    errors.append(f'{name}:{type(e).__name__}:{str(e)[:120]}'); self._mark_failure(name,e); log.warning('AI provider %s failed; trying another provider/key',name)
+  # If every candidate is on cooldown, make one randomized retry rather than silently failing.
+  if not candidates:
+   all_enabled=[n for n in self.order if self.providers.get(n) and getattr(self.providers.get(n),'enabled',False)]
+   random.shuffle(all_enabled)
+   for name in all_enabled:
+    try:
+     r=getattr(self.providers[name],method)(*args,**kwargs)
+     if isinstance(r,str): r=r.strip()
+     if r:return r
+    except Exception as e: errors.append(f'retry:{name}:{type(e).__name__}:{str(e)[:120]}')
+  raise RuntimeError('All configured AI providers/keys failed: '+', '.join(errors) if errors else 'No configured AI providers')
  def generate_text(self,prompt,system=None): return self._try('generate_text',prompt,system)
  def generate_structured(self,prompt,schema,system=None): return self._try('generate_structured',prompt,schema,system)
  def analyze_image(self,image_bytes,prompt): return self._try('analyze_image',image_bytes,prompt)
  def generate_image(self,prompt):
-  self.refresh()
-  for name in self.order:
-   p=self.providers.get(name)
-   if p and getattr(p,'enabled',False):
-    try:
-     r=p.generate_image(prompt)
-     if r:return r
-    except Exception: log.warning('AI image provider %s failed',name)
+  self.refresh(); candidates=[n for n in self.order if self.providers.get(n) and getattr(self.providers.get(n),'enabled',False) and self._cooldown.get(n,0)<=time.time()]; random.shuffle(candidates)
+  for name in candidates:
+   try:
+    r=self.providers[name].generate_image(prompt)
+    if r:return r
+   except Exception as e:self._mark_failure(name,e)
   return None
