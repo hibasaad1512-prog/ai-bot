@@ -11,6 +11,7 @@ from app.telegram.memory_admin import is_owner, menu as god_menu
 from app.memory.handlers import MemoryHandlers
 from app.worker.scheduler import ProactiveScheduler
 from app.worker.media_automation import MediaAutomation
+from app.storage import register_smart_archive
 log=logging.getLogger(__name__)
 
 class KyoosBot:
@@ -40,6 +41,7 @@ class KyoosBot:
         register_owner_controls(self.bot,self.runtime)
         self.handlers=TelegramHandlers(self.bot,self.runtime)
         self.memory_handlers=MemoryHandlers(self.bot,self.runtime,self.handlers)
+        register_smart_archive(self.bot,self.runtime)
         self.media_automation=MediaAutomation(self.bot,self.runtime); self.media_automation.start()
         try:self.handlers._bot_username=(self.bot.get_me().username or '').lower()
         except Exception:self.handlers._bot_username=''; log.exception('Telegram getMe failed')
