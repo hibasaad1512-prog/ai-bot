@@ -64,7 +64,7 @@ def toks(msgs):
 def menu():
  from telebot import types
  k=types.InlineKeyboardMarkup(row_width=2)
- items=[('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط','mad:remix'),('🗳️ استطلاع عشوائي','mad:poll'),('🎭 مود','mad:mood'),('🖼️ وسائط عشوائية','mad:media'),('📊 الحالة','mad:status'),('⚙️ Auto Send','mad:auto'),('🔥 Auto+','mad:autoplus'),('⚙️ تخصيص العشوائية','mad:custom')]
+ items=[('🎯 اختيار الكروب','mad:chats'),('➕ تعريف كروب','mad:addchat'),('📨 إرسال','mad:send'),('🎲 عشوائي','mad:random'),('🧪 خلط','mad:remix'),('🗳️ استطلاع عشوائي','mad:poll'),('🎭 مود','mad:mood'),('🖼️ وسائط عشوائية','mad:media'),('📊 الحالة','mad:status'),('⚙️ Auto Send','mad:auto'),('🔥 Auto+','mad:autoplus'),('⚙️ تخصيص العشوائية','mad:custom'),('🗑️ حذف رسالة','mad:delete_menu'),('🚪 مغادرة الكروب','mad:leave')]
  for a,b in items:k.add(types.InlineKeyboardButton(a,callback_data=b))
  return k
 
@@ -75,8 +75,17 @@ def group_menu(gs):
  for g in gs:
   title=str(g.get('title') or 'Unnamed chat')[:55]
   k.add(types.InlineKeyboardButton(f"🎯 {title} · {g['messages']} رسالة",callback_data=f"mad:select:{g['chat_id']}"))
- k.add(types.InlineKeyboardButton('🔄 تحديث الشاتات','mad:refresh'))
- k.add(types.InlineKeyboardButton('⬅️ رجوع','mad:open'))
+ k.add(types.InlineKeyboardButton('🔄 تحديث الشاتات',callback_data='mad:refresh'))
+ k.add(types.InlineKeyboardButton('⬅️ رجوع',callback_data='mad:open'))
+ return k
+
+def message_menu(msgs):
+ from telebot import types
+ k=types.InlineKeyboardMarkup(row_width=1)
+ for m in msgs[-15:][::-1]:
+  text=(getattr(m,'text',None) or getattr(m,'caption',None) or getattr(m,'media_type',None) or 'رسالة')[:45]
+  k.add(types.InlineKeyboardButton(f'🗑️ {text}',callback_data=f'mad:delete:{m.message_id}'))
+ k.add(types.InlineKeyboardButton('⬅️ رجوع',callback_data='mad:open'))
  return k
 
 def register(bot,runtime):
@@ -96,11 +105,22 @@ def register(bot,runtime):
    chat_id=c.message.chat.id
    if d=='mad:open':bot.send_message(chat_id,'🧪 مختبر الميرفاوية',reply_markup=menu());return
    if d in ('mad:chats','mad:refresh'):
-    _safe_edit(bot,chat_id,c.message.message_id,'🎯 اختر الكروب:',group_menu(groups(runtime.db,bot))) or bot.send_message(chat_id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db,bot)))
-    return
+    _safe_edit(bot,chat_id,c.message.message_id,'🎯 اختر الكروب:',group_menu(groups(runtime.db,bot))) or bot.send_message(chat_id,'🎯 اختر الكروب:',reply_markup=group_menu(groups(runtime.db,bot)));return
    if d=='mad:addchat':save(runtime.db,mad_waiting='addchat');bot.send_message(chat_id,'➕ أرسل Forward من الكروب أو chat ID.');return
    if d.startswith('mad:select:'):
     save(runtime.db,chaos_target_chat_id=int(d.split(':')[-1]),mad_waiting=False);bot.send_message(chat_id,'🎯 تم اختيار الكروب.',reply_markup=menu());return
+   if d=='mad:delete_menu':
+    t=target(runtime.db)
+    if not t:return bot.send_message(chat_id,'🎯 اختار كروبًا أولًا.')
+    msgs=runtime.db.recent_messages(t,15);bot.send_message(chat_id,'🗑️ اختر الرسالة التي تريد حذفها:',reply_markup=message_menu(msgs));return
+   if d.startswith('mad:delete:'):
+    t=target(runtime.db);mid=int(d.split(':')[-1])
+    if not t:return bot.send_message(chat_id,'🎯 اختار كروبًا أولًا.')
+    bot.delete_message(t,mid);bot.answer_callback_query(c.id,'تم الحذف');return
+   if d=='mad:leave':
+    t=target(runtime.db)
+    if not t:return bot.send_message(chat_id,'🎯 اختار كروبًا أولًا.')
+    bot.leave_chat(t);save(runtime.db,chaos_target_chat_id=None);bot.send_message(chat_id,'🚪 غادرت الكروب المحدد.');return
    if d=='mad:auto':
     enabled=not bool(state(runtime.db).get('mad_auto'));save(runtime.db,mad_auto=enabled);bot.send_message(chat_id,('🤖 Auto Send: ON\n💾 محفوظ في Neon ويستأنف بعد Restart.' if enabled else '🛑 Auto Send: OFF'),reply_markup=menu());return
    if d=='mad:autoplus':
@@ -113,8 +133,8 @@ def register(bot,runtime):
    if d=='mad:send':save(runtime.db,mad_waiting='send');return bot.send_message(chat_id,'📨 أرسل الآن أي محتوى: نص، صورة، فيديو، Sticker، GIF أو ملف.')
    if d=='mad:random' and msgs:bot.copy_message(t,t,random.choice(msgs).message_id)
    elif d=='mad:remix':
-    n=random.randint(3,min(15,len(words))) if words else 0;bot.send_message(t,' '.join(random.sample(words,n)) if n else '3:')
-   elif d=='mad:mood':bot.send_message(t,random.choice(['3:','المود اليوم غريب شوية','صافي خليوها على الله','سلام لاباس؟ صافي مزيان','واش؟','مزيان هادي']))
+    n=random.randint(3,min(15,len(words))) if words else 0;bot.send_message(t,' '.join(random.sample(words,n)) if n else '...')
+   elif d=='mad:mood':bot.send_message(t,random.choice(['المود اليوم غريب شوية','صافي خليوها على الله','سلام لاباس؟','واش؟','مزيان هادي']))
    elif d=='mad:media':
     media=[m for m in msgs if getattr(m,'media_type',None)]
     if media:bot.copy_message(t,t,random.choice(media).message_id)
