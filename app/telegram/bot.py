@@ -7,6 +7,7 @@ from app.telegram.commands import install_commands
 from app.telegram.handlers import TelegramHandlers
 from app.telegram.chaos_admin import register as register_chaos_admin
 from app.telegram.owner_controls import register as register_owner_controls
+from app.telegram.moderation import register as register_moderation
 from app.telegram.memory_admin import is_owner, menu as god_menu
 from app.memory.handlers import MemoryHandlers
 from app.worker.scheduler import ProactiveScheduler
@@ -39,6 +40,7 @@ class KyoosBot:
             self.bot.send_message(message.chat.id,'🔐 GOD PANEL\n\nAll admin and automation controls are here.',reply_markup=god_menu())
         register_chaos_admin(self.bot,self.runtime)
         register_owner_controls(self.bot,self.runtime)
+        register_moderation(self.bot,self.runtime)
         self.handlers=TelegramHandlers(self.bot,self.runtime)
         self.memory_handlers=MemoryHandlers(self.bot,self.runtime,self.handlers)
         register_smart_archive(self.bot,self.runtime)
