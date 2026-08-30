@@ -50,15 +50,17 @@ class KyoosBot:
         base=settings.public_base_url
         if not base: log.warning('Telegram webhook NOT configured: PUBLIC_BASE_URL/RENDER_EXTERNAL_URL is missing'); return
         url=f'{base.rstrip("/")}/telegram/webhook'
+        allowed_updates=['message','edited_message','channel_post','edited_channel_post','callback_query','my_chat_member','chat_member','pre_checkout_query']
         try:
-            info=self.bot.get_webhook_info(); current=getattr(info,'url','') or ''
-            if current==url:return
             for attempt in range(3):
-                try:self.bot.set_webhook(url=url,secret_token=settings.webhook_secret or None); break
+                try:
+                    self.bot.set_webhook(url=url,secret_token=settings.webhook_secret or None,allowed_updates=allowed_updates,drop_pending_updates=False)
+                    break
                 except Exception as exc:
                     if '429' not in str(exc) or attempt==2: raise
                     time.sleep(1.5*(attempt+1))
-            info=self.bot.get_webhook_info(); log.info('telegram webhook configured: url=%s pending=%s last_error=%s',url,getattr(info,'pending_update_count',0),getattr(info,'last_error_message','') or 'none')
+            info=self.bot.get_webhook_info()
+            log.info('telegram webhook configured: url=%s pending=%s allowed=%s last_error=%s',url,getattr(info,'pending_update_count',0),allowed_updates,getattr(info,'last_error_message','') or 'none')
         except Exception: log.exception('webhook setup failed; existing webhook will be left untouched')
     def _start_proactive(self):
         if not settings.enabled_proactive:return
