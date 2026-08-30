@@ -44,9 +44,7 @@ def _safe_edit(bot, chat_id, message_id, text, reply_markup=None):
         bot.edit_message_text(text, chat_id, message_id, reply_markup=reply_markup)
         return True
     except Exception as e:
-        # Telegram returns 400 when refresh produces identical content/markup.
-        if 'message is not modified' in str(e).lower():
-            return True
+        if 'message is not modified' in str(e).lower(): return True
         raise
 
 def _set_lab_target(db,cid):
@@ -69,13 +67,9 @@ def _test_provider(runtime,p):
     return False,'All saved keys failed: '+', '.join(errors[:6])
 
 def register(bot,runtime):
-    @bot.message_handler(content_types=['text','photo','video','sticker','animation','document','audio','voice','video_note'],func=lambda m: bool(getattr(m,'chat',None)) and getattr(m.chat,'type','') in ('group','supergroup'))
-    def track_chat(m):
-        try:
-            s=_state(runtime.db); arr=[x for x in s.get('known_chats',[]) if int(x.get('chat_id',0))!=int(m.chat.id)]
-            arr.insert(0,{'chat_id':int(m.chat.id),'title':getattr(m.chat,'title',None),'username':getattr(m.chat,'username',None)})
-            s['known_chats']=arr[:200]; _save(runtime.db,s)
-        except Exception: pass
+    # Do NOT register a catch-all group message handler here. In pyTelegramBotAPI
+    # the first matching handler can consume the update and prevent the AI handler
+    # from running. Group discovery is handled by my_chat_member and the archive.
     @bot.callback_query_handler(func=lambda c: bool(c.data) and c.data.startswith('owner:'))
     def owner_callback(c):
         if not is_owner(getattr(c.from_user,'id',None)):
@@ -95,9 +89,9 @@ def register(bot,runtime):
                 title=next((x.get('title') for x in chats if int(x['chat_id'])==cid),None) or f'Chat {cid}'
                 _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🎯 Selected: {title}',reply_markup=menu()); return
             if d.startswith('owner:provider:'):
-                p=d.split(':')[-1]; _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🔑 {p.title()}\n\nSaved keys: {len(runtime.ai.provider_keys(p))}\n\nKeys survive restarts and are masked in the UI.',reply_markup=provider_actions(p)); return
+                p=d.split(':')[-1]; _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🔑 {p.title()}\n\nSaved keys: {len(runtime.ai.provider_keys(p))}\n\nKeys survive restarts. Full key values are never logged.',reply_markup=provider_actions(p)); return
             if d=='owner:providers':
-                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🔑 AI Providers\n\nKeys are stored persistently in the database. They are masked in the admin UI and are never echoed after entry.',reply_markup=provider_menu(PROVIDERS)); return
+                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🔑 AI Providers\n\nKeys are stored persistently in the database. They are never echoed into logs or error messages.',reply_markup=provider_menu(PROVIDERS)); return
             if d.startswith('owner:padd:'):
                 p=d.split(':')[-1]; WAIT[uid]=('add',p); _safe_edit(bot,c.message.chat.id,c.message.message_id,f'➕ Add {p.title()} API key\n\nSend the key here. It is stored in the database and never echoed.\n\nIt will be tested immediately.',reply_markup=_back(f'owner:provider:{p}')); return
             if d.startswith('owner:plist:'):
@@ -116,7 +110,7 @@ def register(bot,runtime):
             ok,reason=runtime.ai.add_provider_key(p,value)
             if not ok: bot.send_message(m.chat.id,f'🔴 Rejected — {reason}',reply_markup=provider_actions(p)); return
             good,msg=_test_provider(runtime,p); icon='🟢' if good else '🔴'
-            bot.send_message(m.chat.id,f'💾 Saved permanently: {p.title()}\n{icon} {msg}\n\n🔄 If it fails later, the router tries the next key/provider automatically.',reply_markup=provider_actions(p))
+            bot.send_message(m.chat.id,f'💾 Saved permanently: {p.title()}\n{icon} {msg}\n\n🔄 If it fails later, the router tries another key/provider automatically.',reply_markup=provider_actions(p))
         else:
             try: ok,reason=runtime.ai.delete_provider_key(p,int(value)-1); bot.send_message(m.chat.id,f"{'🗑️ Deleted' if ok else '❌ Failed'} — {reason}",reply_markup=provider_actions(p))
             except Exception: bot.send_message(m.chat.id,'❌ Invalid key number.',reply_markup=provider_actions(p))
