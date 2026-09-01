@@ -42,8 +42,6 @@ class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     groq_api_key: str = os.getenv("GROQ_API_KEY", "").strip()
     groq_text_model: str = os.getenv("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile").strip()
-
-    # Multi-provider support. Secrets stay in Render environment variables; they are never committed.
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "").strip()
@@ -56,7 +54,6 @@ class Settings:
     text_model: str = os.getenv("GEMINI_TEXT_MODEL", "gemini-2.5-flash").strip()
     image_model: str = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image").strip()
     ai_provider_order: str = os.getenv("AI_PROVIDER_ORDER", "groq,openai,deepseek,openrouter,together,gemini").strip()
-
     groq_admin_ids: frozenset[int] = field(default_factory=lambda: env_ids("GROQ_ADMIN_IDS") or frozenset({8734853156}))
     database_url: str = os.getenv("DATABASE_URL", "").strip()
     redis_url: str = os.getenv("REDIS_URL", "").strip()
@@ -81,8 +78,9 @@ class Settings:
     enabled_moderation: bool = env_bool("ENABLED_MODERATION", True)
     enabled_games: bool = env_bool("ENABLED_GAMES", True)
     enabled_proactive: bool = env_bool("ENABLED_PROACTIVE", True)
-    proactive_min_interval: int = env_int("PROACTIVE_MIN_INTERVAL", 21600, 60)
-    proactive_max_interval: int = env_int("PROACTIVE_MAX_INTERVAL", 54000, 60)
+    # More lively than the old 6–15 hour default, while still being occasional.
+    proactive_min_interval: int = env_int("PROACTIVE_MIN_INTERVAL", 1200, 60)
+    proactive_max_interval: int = env_int("PROACTIVE_MAX_INTERVAL", 5400, 60)
     proactive_chance: int = env_int("PROACTIVE_CHANCE", 100, 0)
     ai_min_score: int = env_int("AI_MIN_SCORE", 34, 0)
     callback_min_age_seconds: int = env_int("CALLBACK_MIN_AGE_SECONDS", 300, 60)
