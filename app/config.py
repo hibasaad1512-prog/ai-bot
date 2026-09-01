@@ -81,7 +81,6 @@ class Settings:
     # Proactive messages are intentionally occasional: random delay between 2 and 5 hours.
     proactive_min_interval: int = env_int("PROACTIVE_MIN_INTERVAL", 7200, 60)
     proactive_max_interval: int = env_int("PROACTIVE_MAX_INTERVAL", 18000, 60)
-    proactive_chance: int = env_int("PROACTIVE_CHANCE", 100, 0)
     ai_min_score: int = env_int("AI_MIN_SCORE", 34, 0)
     callback_min_age_seconds: int = env_int("CALLBACK_MIN_AGE_SECONDS", 300, 60)
     proactive_quiet_seconds: int = env_int("PROACTIVE_QUIET_SECONDS", 600, 60)
