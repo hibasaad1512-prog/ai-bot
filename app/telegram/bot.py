@@ -9,6 +9,7 @@ from app.telegram.chaos_admin import register as register_chaos_admin
 from app.telegram.owner_controls import register as register_owner_controls
 from app.telegram.moderation import register as register_moderation
 from app.telegram.memory_admin import is_owner, menu as god_menu
+from app.telegram.social_mix import install as install_social_mix
 from app.memory.handlers import MemoryHandlers
 from app.worker.scheduler import ProactiveScheduler
 from app.worker.media_automation import MediaAutomation
@@ -24,8 +25,6 @@ class KyoosBot:
         @self.bot.my_chat_member_handler()
         def membership_update(update):
             self._sync_membership(update)
-        # Telegram sends edited messages as a separate update type.  Ignore them
-        # deliberately: an edit must never trigger a second AI reply.
         @self.bot.edited_message_handler(func=lambda m: True)
         def edited_message_ignored(message):
             return
@@ -51,6 +50,9 @@ class KyoosBot:
         register_moderation(self.bot,self.runtime)
         self.handlers=TelegramHandlers(self.bot,self.runtime)
         self.memory_handlers=MemoryHandlers(self.bot,self.runtime,self.handlers)
+        # Install after memory wrapping so the local/random branch is the final
+        # front-door decision and the original AI pipeline remains the fallback.
+        install_social_mix(self.handlers)
         register_smart_archive(self.runtime)
         self.media_automation=MediaAutomation(self.bot,self.runtime); self.media_automation.start()
         try:self.handlers._bot_username=(self.bot.get_me().username or '').lower()
@@ -98,10 +100,24 @@ class KyoosBot:
             info=self.bot.get_webhook_info()
             log.info('telegram webhook configured: url=%s pending=%s allowed=%s last_error=%s',url,getattr(info,'pending_update_count',0),allowed_updates,getattr(info,'last_error_message','') or 'none')
         except Exception: log.exception('webhook setup failed; existing webhook will be left untouched')
+
     def _start_proactive(self):
         if not settings.enabled_proactive:return
         self.scheduler=ProactiveScheduler(self._proactive_tick); self.scheduler.start()
+
+    def _selected_chat(self):
+        try:
+            state=self.runtime.db.get_json('chat_settings','chat_id',0,{})
+            cid=int(state.get('selected_chat_id',0) or 0)
+            return cid if cid < 0 else None
+        except Exception:
+            return None
+
     def _proactive_tick(self):
-        chat_ids=list(self.runtime.memory._data.keys())
-        if chat_ids:self.handlers.proactive(random.choice(chat_ids))
+        # The owner-selected group is persistent. Never randomly switch the
+        # destination on every scheduler tick.
+        chat_id=self._selected_chat()
+        if chat_id is not None:
+            self.handlers.proactive(chat_id)
+
     def process(self,update): self.bot.process_new_updates([update])
