@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import random
 import time
+import types
 
 from app.config import settings
 from app.models import ChatMessage
@@ -25,6 +26,9 @@ RANDOM_REPLIES = (
     "hmm… interesting 👀",
     "meow.",
 )
+
+EXTRA_MEDIA_CHANCE = 0.07
+EXTRA_MEDIA_COOLDOWN = 8 * 60
 
 
 def _remember_user(handlers, message, safe_text: str) -> None:
@@ -62,9 +66,57 @@ def _moderation_allows(handlers, message, text: str) -> bool:
     return True
 
 
+def _send_extra_media(handlers, message) -> None:
+    """Occasionally add a spontaneous media reaction after a real bot reply."""
+    if not is_group(getattr(message.chat, "type", "")) or random.random() >= EXTRA_MEDIA_CHANCE:
+        return
+    try:
+        now = time.time()
+        cooldowns = getattr(handlers, "_social_extra_media_at", {})
+        if now < float(cooldowns.get(message.chat.id, 0)):
+            return
+        ref = handlers.rt.images.choose_random_media(message.chat.id)
+        if not ref:
+            return
+        if ref.media_type == "photo":
+            handlers.bot.send_photo(message.chat.id, ref.telegram_file_id)
+        elif ref.media_type == "video":
+            handlers.bot.send_video(message.chat.id, ref.telegram_file_id)
+        elif ref.media_type == "sticker":
+            handlers.bot.send_sticker(message.chat.id, ref.telegram_file_id)
+        elif ref.media_type == "animation":
+            handlers.bot.send_animation(message.chat.id, ref.telegram_file_id)
+        elif ref.media_type == "audio":
+            handlers.bot.send_audio(message.chat.id, ref.telegram_file_id)
+        elif ref.media_type == "voice":
+            handlers.bot.send_voice(message.chat.id, ref.telegram_file_id)
+        else:
+            return
+        handlers.rt.images.mark_used(ref)
+        cooldowns[message.chat.id] = now + EXTRA_MEDIA_COOLDOWN
+        handlers._social_extra_media_at = cooldowns
+    except Exception:
+        log.exception("spontaneous reply media failed")
+
+
+def _install_reply_extras(handlers) -> None:
+    """Hook the existing AI/local reply bookkeeping without changing its reply logic."""
+    original = getattr(handlers, "_remember_bot_reply", None)
+    if not callable(original):
+        return
+
+    def wrapped(instance, message, text, reply_to=None):
+        result = original(message, text, reply_to)
+        _send_extra_media(instance, message)
+        return result
+
+    handlers._remember_bot_reply = types.MethodType(wrapped, handlers)
+
+
 def install(handlers) -> None:
-    """Mix instant local replies with the existing AI path without disabling memory/moderation."""
+    """Mix instant local replies with the existing AI path and occasional reply extras."""
     original = handlers.on_message
+    _install_reply_extras(handlers)
 
     def wrapped(message):
         try:
