@@ -78,9 +78,9 @@ class Settings:
     enabled_moderation: bool = env_bool("ENABLED_MODERATION", True)
     enabled_games: bool = env_bool("ENABLED_GAMES", True)
     enabled_proactive: bool = env_bool("ENABLED_PROACTIVE", True)
-    # More lively than the old 6–15 hour default, while still being occasional.
-    proactive_min_interval: int = env_int("PROACTIVE_MIN_INTERVAL", 1200, 60)
-    proactive_max_interval: int = env_int("PROACTIVE_MAX_INTERVAL", 5400, 60)
+    # Proactive messages are intentionally occasional: random delay between 2 and 5 hours.
+    proactive_min_interval: int = env_int("PROACTIVE_MIN_INTERVAL", 7200, 60)
+    proactive_max_interval: int = env_int("PROACTIVE_MAX_INTERVAL", 18000, 60)
     proactive_chance: int = env_int("PROACTIVE_CHANCE", 100, 0)
     ai_min_score: int = env_int("AI_MIN_SCORE", 34, 0)
     callback_min_age_seconds: int = env_int("CALLBACK_MIN_AGE_SECONDS", 300, 60)
