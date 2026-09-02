@@ -13,9 +13,9 @@ class OpenAICompatibleProvider(AIProvider):
   if not self.enabled: raise RuntimeError(f'{self.name} is not configured')
   headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}
   if self.name=='openrouter': headers.update({'HTTP-Referer':os.getenv('OPENROUTER_HTTP_REFERER','https://localhost'),'X-Title':os.getenv('OPENROUTER_APP_NAME','Merva AI')})
-  payload={'model':self.model,'messages':messages,'max_tokens':128,'stream':False,**extra}
-  # Slightly more connection budget prevents false failures on cold/free endpoints.
-  r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json=payload,timeout=(1.2,4.0)); r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
+  payload={'model':self.model,'messages':messages,'max_tokens':96,'stream':False,**extra}
+  # Keep normal chat fast. Provider failures are handled by the router fallback.
+  r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json=payload,timeout=(0.9,2.8)); r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
   if not choices: raise RuntimeError(f'{self.name}: empty response')
   return data
  def _messages(self,prompt,system): return ([{'role':'system','content':system}] if system else [])+[{'role':'user','content':prompt}]
