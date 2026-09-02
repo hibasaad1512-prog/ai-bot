@@ -12,7 +12,6 @@ def _chats(db):
     for x in s.get('known_chats',[]):
         try: cid=int(x.get('chat_id'))
         except Exception: continue
-        # A chat explicitly marked absent must never be resurrected from old memory/db rows.
         if str(cid) in memberships and not memberships[str(cid)]: continue
         if cid not in known or x.get('title'):
             known[cid]={'chat_id':cid,'title':x.get('title'),'username':x.get('username'),'bot_member':True}
@@ -33,7 +32,9 @@ def _refresh_chat_names(bot,db):
             if bot_id is not None:
                 member=bot.get_chat_member(cid,bot_id)
                 status=str(getattr(member,'status','')).lower()
-                present=status in {'member','administrator','creator'}
+                # Telegram can report a bot as restricted. If is_member is true,
+                # it still belongs to the group and can be selected/saved.
+                present=status in {'member','administrator','creator'} or (status=='restricted' and bool(getattr(member,'is_member',False)))
                 if not present:
                     x['bot_member']=False
                     s=_state(db); memberships=dict(s.get('bot_memberships',{})); memberships[str(cid)]=False; s['bot_memberships']=memberships
@@ -45,7 +46,6 @@ def _refresh_chat_names(bot,db):
             if fresh_title and fresh_title != title: title=fresh_title; changed=True
             if fresh_username and fresh_username != username: username=fresh_username; changed=True
         except Exception as exc:
-            # If Telegram says the bot cannot access the chat, do not display stale membership.
             if any(t in str(exc).lower() for t in ('chat not found','user not found','kicked','forbidden')):
                 s=_state(db); memberships=dict(s.get('bot_memberships',{})); memberships[str(cid)]=False; s['bot_memberships']=memberships; changed=True; continue
         out.append({'chat_id':cid,'title':title,'username':username,'bot_member':True})
@@ -70,7 +70,7 @@ def _set_lab_target(db,cid):
 
 def _test_provider(runtime,p):
     runtime.ai.refresh(); keys=runtime.ai.provider_keys(p)
-    if not keys:return False,'No saved key'
+    if not keys:return False,'No saved API key'
     names=['groq'] if p=='groq' else [f'{p}:{i+1}' for i in range(len(keys))]
     errors=[]
     for name in names:
@@ -92,28 +92,30 @@ def register(bot,runtime):
         try:
             bot.answer_callback_query(c.id)
             if d in ('owner:back','owner:menu'):
-                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🔐 GOD PANEL',reply_markup=menu()); return
+                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🔐 GOD PANEL\n\n1️⃣ Choose the permanent group\n2️⃣ Add/test AI API keys\n3️⃣ Configure activity & media',reply_markup=menu()); return
             if d in ('owner:chats','owner:chats_refresh'):
                 chats=_refresh_chat_names(bot,runtime.db)
-                kb=chat_menu(chats,_selected(runtime.db))
-                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🎯 Choose Chat\n\nGroups are detected automatically.\nOnly groups where Merva is currently a member are shown.',reply_markup=kb); return
+                selected=_selected(runtime.db)
+                text='🎯 CHOOSE GROUP\n\nSelect the group once. The choice is saved permanently and reused after restarts/deploys.\n\nRestricted groups are allowed when Telegram reports the bot is still a member.'
+                if selected: text+='\n\n⭐ Current selection: '+str(selected)
+                _safe_edit(bot,c.message.chat.id,c.message.message_id,text,reply_markup=chat_menu(chats,selected)); return
             if d.startswith('owner:chat:'):
                 cid=int(d.split(':')[-1]); s=_state(runtime.db); s['selected_chat_id']=cid; _save(runtime.db,s); _set_lab_target(runtime.db,cid)
                 chats=_refresh_chat_names(bot,runtime.db)
                 title=next((x.get('title') for x in chats if int(x['chat_id'])==cid),None) or f'Chat {cid}'
-                _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🎯 Selected: {title}',reply_markup=menu()); return
+                _safe_edit(bot,c.message.chat.id,c.message.message_id,f'✅ GROUP SAVED\n\n🎯 {title}\n🆔 {cid}\n\nThis group is now the permanent target for proactive/automation features. It will not randomly switch groups.',reply_markup=menu()); return
             if d.startswith('owner:provider:'):
-                p=d.split(':')[-1]; _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🔑 {p.title()}\n\nSaved keys: {len(runtime.ai.provider_keys(p))}\n\nKeys survive restarts. Full key values are never logged.',reply_markup=provider_actions(p)); return
+                p=d.split(':')[-1]; _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🔑 {p.title()} API\n\n📌 Where to put the API key:\nTap ➕ Add API key below, then send the key in this private chat.\n\n💾 Storage: persistent database\n🔒 Keys are not printed in normal logs.\n🧪 Use Test API after saving.',reply_markup=provider_actions(p)); return
             if d=='owner:providers':
-                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🔑 AI Providers\n\nKeys are stored persistently in the database. They are never echoed into logs or error messages.',reply_markup=provider_menu(PROVIDERS)); return
+                _safe_edit(bot,c.message.chat.id,c.message.message_id,'🔑 AI API PROVIDERS\n\nChoose the company/provider first, then use ➕ Add API key.\n\n🟢 Groq  •  🔵 Gemini  •  ⚫ OpenAI\n🔴 DeepSeek  •  🟣 OpenRouter  •  🟠 Together',reply_markup=provider_menu(PROVIDERS)); return
             if d.startswith('owner:padd:'):
-                p=d.split(':')[-1]; WAIT[uid]=('add',p); _safe_edit(bot,c.message.chat.id,c.message.message_id,f'➕ Add {p.title()} API key\n\nSend the key here. It is stored in the database and never echoed.\n\nIt will be tested immediately.',reply_markup=_back(f'owner:provider:{p}')); return
+                p=d.split(':')[-1]; WAIT[uid]=('add',p); _safe_edit(bot,c.message.chat.id,c.message.message_id,f'➕ ADD {p.upper()} API KEY\n\n1. Send the API key as your next private message.\n2. It will be saved persistently.\n3. The bot will test it immediately.\n\n⚠️ Send API keys only here in your private chat.',reply_markup=_back(f'owner:provider:{p}')); return
             if d.startswith('owner:plist:'):
-                p=d.split(':')[-1]; keys=runtime.ai.provider_keys(p); lines=[f'🔑 {p.title()} keys: {len(keys)}']+[f'{i}. {k[:4]}…{k[-4:]}' for i,k in enumerate(keys,1)]; _safe_edit(bot,c.message.chat.id,c.message.message_id,'\n'.join(lines),reply_markup=provider_actions(p)); return
+                p=d.split(':')[-1]; keys=runtime.ai.provider_keys(p); lines=[f'🔑 {p.title()} — SAVED KEYS: {len(keys)}']+[f'{i}. {k[:4]}…{k[-4:]}' for i,k in enumerate(keys,1)]; _safe_edit(bot,c.message.chat.id,c.message.message_id,'\n'.join(lines),reply_markup=provider_actions(p)); return
             if d.startswith('owner:pdelete:'):
-                p=d.split(':')[-1]; WAIT[uid]=('delete',p); _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🗑 Send the {p.title()} key number to delete:',reply_markup=_back(f'owner:provider:{p}')); return
+                p=d.split(':')[-1]; WAIT[uid]=('delete',p); _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🗑 DELETE {p.title()} KEY\n\nSend the key number (for example: 1).',reply_markup=_back(f'owner:provider:{p}')); return
             if d.startswith('owner:ptest:'):
-                p=d.split(':')[-1]; ok,msg=_test_provider(runtime,p); icon='🟢' if ok else '🔴'; _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🧪 {p.title()}\n\n{icon} {msg}',reply_markup=provider_actions(p)); return
+                p=d.split(':')[-1]; ok,msg=_test_provider(runtime,p); icon='🟢' if ok else '🔴'; _safe_edit(bot,c.message.chat.id,c.message.message_id,f'🧪 {p.title()} API TEST\n\n{icon} {msg}',reply_markup=provider_actions(p)); return
         except Exception as e:
             bot.send_message(c.message.chat.id,f'❌ Admin error: {type(e).__name__}: {str(e)[:160]}')
     @bot.message_handler(content_types=['text'],func=lambda m:is_owner(getattr(m.from_user,'id',None)) and getattr(m.chat,'type','')=='private' and int(getattr(m.from_user,'id',0)) in WAIT)
