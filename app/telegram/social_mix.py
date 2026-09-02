@@ -2,37 +2,43 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
 import types
 
 from app.config import settings
 from app.models import ChatMessage
 from app.ai.privacy import PrivacyFilter
+from app.memory.store import MemoryStore
 from app.telegram.permissions import is_group
 
 log = logging.getLogger(__name__)
 
+# Local replies are a spice, not the main personality. The AI should handle most messages.
 RANDOM_REPLIES = (
-    "ههههه شنو هاد 😂",
-    "واش بصح؟ 😭",
-    "الميرفاوية كتراقب بصمت 👀",
-    "آه لا لا 😹",
-    "شنو كتخربقو تما؟",
-    "مزيان هادي 😂",
-    "أنا ما شفت والو… 👀",
-    "mrrp 😼",
-    "واخااا 😭",
-    "هادشي خرج على السيطرة شوية 😹",
-    "hmm… interesting 👀",
-    "meow.",
-    "شنو واقع هنا؟ 😭",
-    "واش نتاوما ديما هكا؟ 😹",
-    "أنا حاضرة، كملو 👀",
-    "هادي دخلات فشي مستوى آخر 😂",
+    "ههههه 😭",
+    "واش بصح؟",
+    "آه لا لا 😂",
+    "شنو هادشي 😭",
+    "مزيان هادي",
+    "أنا غير كنشوف 👀",
+    "هادشي خرج شوية على السيطرة 😹",
+    "hmm 👀",
+    "واخاا",
+    "شنو واقع هنا؟",
+    "كملو كملو 😂",
+    "أنا حاضرة 😼",
+    "nah 😭",
+    "bro 💀",
 )
 
-EXTRA_MEDIA_CHANCE = 0.07
-EXTRA_MEDIA_COOLDOWN = 8 * 60
+# Keep media spontaneous but uncommon enough to feel intentional.
+EXTRA_MEDIA_CHANCE = 0.16
+EXTRA_MEDIA_COOLDOWN = 4 * 60
+
+# Background analysis is deliberately throttled so it never becomes the reason a reply is slow.
+ANALYSIS_EVERY = 6
+ANALYSIS_COOLDOWN = 90
 
 
 def _fallback_reply() -> str:
@@ -40,7 +46,7 @@ def _fallback_reply() -> str:
 
 
 def _install_ai_fallback(handlers) -> None:
-    """Never let an unavailable/empty AI provider turn a message into silence or 'None'."""
+    """Never let an unavailable/empty AI provider turn a message into silence."""
     ai = getattr(getattr(handlers, "rt", None), "ai", None)
     if ai is None or getattr(ai, "_social_mix_fallback_installed", False):
         return
@@ -78,7 +84,7 @@ def _remember_user(handlers, message, safe_text: str) -> None:
             )
         )
     except Exception:
-        log.exception("could not remember random-branch user message")
+        log.exception("could not remember local-branch user message")
 
 
 def _moderation_allows(handlers, message, text: str) -> bool:
@@ -94,12 +100,59 @@ def _moderation_allows(handlers, message, text: str) -> bool:
                 pass
             return False
     except Exception:
-        log.exception("random-branch moderation check failed")
+        log.exception("local-branch moderation check failed")
     return True
 
 
+def _background_analyze(handlers, message, user_text: str, bot_reply: str) -> None:
+    """Analyze useful stable context after the reply, never on the request path."""
+    try:
+        ai = handlers.rt.ai
+        now = time.time()
+        state = getattr(handlers, "_merva_analysis_state", {})
+        count = int(state.get(message.chat.id, {}).get("count", 0)) + 1
+        last = float(state.get(message.chat.id, {}).get("last", 0))
+        state[message.chat.id] = {"count": count, "last": last}
+        handlers._merva_analysis_state = state
+        if count % ANALYSIS_EVERY != 0 or now - last < ANALYSIS_COOLDOWN:
+            return
+        state[message.chat.id]["last"] = now
+
+        def worker() -> None:
+            try:
+                prompt = (
+                    "Extract only stable, useful facts explicitly stated in this short group exchange. "
+                    "Do not store jokes, insults, secrets, credentials, personal contact data, or one-off claims. "
+                    "Return JSON only: {\"memories\":[{\"key\":\"short_key\",\"value\":\"short fact\"}]} .\n\n"
+                    f"USER: {user_text[:700]}\nMERVA: {bot_reply[:500]}"
+                )
+                result = ai.generate_structured(
+                    prompt,
+                    {"type": "object", "properties": {"memories": {"type": "array"}}},
+                    system="You are Merva's background memory analyst. Be conservative; empty memories is a valid result.",
+                )
+                if not isinstance(result, dict):
+                    return
+                memories = result.get("memories") or []
+                store = MemoryStore(handlers.rt.db)
+                for item in memories[:2]:
+                    if not isinstance(item, dict):
+                        continue
+                    key = str(item.get("key") or "").strip()[:100]
+                    value = str(item.get("value") or "").strip()
+                    if key and value and len(value) <= 500:
+                        store.remember(message.chat.id, message.from_user.id, value, memory_key="auto:" + key, memory_type="ai")
+                log.debug("Merva background analysis complete chat=%s memories=%s", message.chat.id, len(memories))
+            except Exception:
+                log.debug("Merva background analysis skipped", exc_info=True)
+
+        threading.Thread(target=worker, name="merva-memory-analysis", daemon=True).start()
+    except Exception:
+        log.debug("could not schedule background analysis", exc_info=True)
+
+
 def _send_extra_media(handlers, message) -> None:
-    """Occasionally add a spontaneous media reaction after a real bot reply."""
+    """Occasionally add context-independent media from the group's collected pool."""
     if not is_group(getattr(message.chat, "type", "")) or random.random() >= EXTRA_MEDIA_CHANCE:
         return
     try:
@@ -125,11 +178,10 @@ def _send_extra_media(handlers, message) -> None:
         cooldowns[message.chat.id] = now + EXTRA_MEDIA_COOLDOWN
         handlers._social_extra_media_at = cooldowns
     except Exception:
-        log.exception("spontaneous reply media failed")
+        log.debug("spontaneous reply media failed", exc_info=True)
 
 
 def _install_reply_extras(handlers) -> None:
-    """Hook existing reply bookkeeping without changing its reply logic."""
     original = getattr(handlers, "_remember_bot_reply", None)
     if not callable(original) or getattr(handlers, "_social_extras_installed", False):
         return
@@ -137,6 +189,12 @@ def _install_reply_extras(handlers) -> None:
     def wrapped(instance, message, text, reply_to=None):
         result = original(message, text, reply_to)
         _send_extra_media(instance, message)
+        try:
+            user_text = (getattr(message, "text", None) or "").strip()
+            if user_text and text:
+                _background_analyze(instance, message, user_text, str(text))
+        except Exception:
+            pass
         return result
 
     handlers._remember_bot_reply = types.MethodType(wrapped, handlers)
@@ -144,7 +202,7 @@ def _install_reply_extras(handlers) -> None:
 
 
 def install(handlers) -> None:
-    """Mix AI with instant local replies and guarantee a visible fallback response."""
+    """Use AI as the main voice, local reactions as occasional social spice, and analyze in background."""
     original = handlers.on_message
     _install_ai_fallback(handlers)
     _install_reply_extras(handlers)
@@ -158,7 +216,7 @@ def install(handlers) -> None:
                 and not getattr(message.from_user, "is_bot", False)
                 and text
                 and not text.startswith("/")
-                and random.random() < 0.30
+                and random.random() < 0.12
             ):
                 privacy = PrivacyFilter.sanitize(text)
                 if privacy.sensitive or privacy.redacted:
@@ -176,7 +234,7 @@ def install(handlers) -> None:
                 try:
                     handlers._remember_bot_reply(message, reply, message.message_id)
                 except Exception:
-                    log.exception("could not remember local random reply")
+                    log.exception("could not remember local social reply")
                 return
         except Exception:
             log.exception("local social mix failed; falling back to AI")
