@@ -25,10 +25,42 @@ RANDOM_REPLIES = (
     "هادشي خرج على السيطرة شوية 😹",
     "hmm… interesting 👀",
     "meow.",
+    "شنو واقع هنا؟ 😭",
+    "واش نتاوما ديما هكا؟ 😹",
+    "أنا حاضرة، كملو 👀",
+    "هادي دخلات فشي مستوى آخر 😂",
 )
 
 EXTRA_MEDIA_CHANCE = 0.07
 EXTRA_MEDIA_COOLDOWN = 8 * 60
+
+
+def _fallback_reply() -> str:
+    return random.choice(RANDOM_REPLIES)
+
+
+def _install_ai_fallback(handlers) -> None:
+    """Never let an unavailable/empty AI provider turn a message into silence or 'None'."""
+    ai = getattr(getattr(handlers, "rt", None), "ai", None)
+    if ai is None or getattr(ai, "_social_mix_fallback_installed", False):
+        return
+    original = getattr(ai, "generate_text", None)
+    if not callable(original):
+        return
+
+    def safe_generate(instance, prompt, system=None):
+        try:
+            result = original(prompt, system)
+            text = str(result or "").strip()
+            if not text or text.lower() in {"none", "null", "nil", "n/a"}:
+                return _fallback_reply()
+            return text
+        except Exception:
+            log.exception("AI failed; using local social fallback")
+            return _fallback_reply()
+
+    ai.generate_text = types.MethodType(safe_generate, ai)
+    ai._social_mix_fallback_installed = True
 
 
 def _remember_user(handlers, message, safe_text: str) -> None:
@@ -78,20 +110,17 @@ def _send_extra_media(handlers, message) -> None:
         ref = handlers.rt.images.choose_random_media(message.chat.id)
         if not ref:
             return
-        if ref.media_type == "photo":
-            handlers.bot.send_photo(message.chat.id, ref.telegram_file_id)
-        elif ref.media_type == "video":
-            handlers.bot.send_video(message.chat.id, ref.telegram_file_id)
-        elif ref.media_type == "sticker":
-            handlers.bot.send_sticker(message.chat.id, ref.telegram_file_id)
-        elif ref.media_type == "animation":
-            handlers.bot.send_animation(message.chat.id, ref.telegram_file_id)
-        elif ref.media_type == "audio":
-            handlers.bot.send_audio(message.chat.id, ref.telegram_file_id)
-        elif ref.media_type == "voice":
-            handlers.bot.send_voice(message.chat.id, ref.telegram_file_id)
-        else:
+        sender = {
+            "photo": handlers.bot.send_photo,
+            "video": handlers.bot.send_video,
+            "sticker": handlers.bot.send_sticker,
+            "animation": handlers.bot.send_animation,
+            "audio": handlers.bot.send_audio,
+            "voice": handlers.bot.send_voice,
+        }.get(ref.media_type)
+        if not sender:
             return
+        sender(message.chat.id, ref.telegram_file_id)
         handlers.rt.images.mark_used(ref)
         cooldowns[message.chat.id] = now + EXTRA_MEDIA_COOLDOWN
         handlers._social_extra_media_at = cooldowns
@@ -100,9 +129,9 @@ def _send_extra_media(handlers, message) -> None:
 
 
 def _install_reply_extras(handlers) -> None:
-    """Hook the existing AI/local reply bookkeeping without changing its reply logic."""
+    """Hook existing reply bookkeeping without changing its reply logic."""
     original = getattr(handlers, "_remember_bot_reply", None)
-    if not callable(original):
+    if not callable(original) or getattr(handlers, "_social_extras_installed", False):
         return
 
     def wrapped(instance, message, text, reply_to=None):
@@ -111,11 +140,13 @@ def _install_reply_extras(handlers) -> None:
         return result
 
     handlers._remember_bot_reply = types.MethodType(wrapped, handlers)
+    handlers._social_extras_installed = True
 
 
 def install(handlers) -> None:
-    """Mix instant local replies with the existing AI path and occasional reply extras."""
+    """Mix AI with instant local replies and guarantee a visible fallback response."""
     original = handlers.on_message
+    _install_ai_fallback(handlers)
     _install_reply_extras(handlers)
 
     def wrapped(message):
@@ -135,7 +166,7 @@ def install(handlers) -> None:
                 if not _moderation_allows(handlers, message, text):
                     return
                 _remember_user(handlers, message, privacy.text)
-                reply = random.choice(RANDOM_REPLIES)
+                reply = _fallback_reply()
                 handlers.bot.send_message(
                     message.chat.id,
                     reply,
