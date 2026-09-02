@@ -14,7 +14,6 @@ class OpenAICompatibleProvider(AIProvider):
   headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}
   if self.name=='openrouter': headers.update({'HTTP-Referer':os.getenv('OPENROUTER_HTTP_REFERER','https://localhost'),'X-Title':os.getenv('OPENROUTER_APP_NAME','Merva AI')})
   payload={'model':self.model,'messages':messages,'max_tokens':96,'stream':False,**extra}
-  # Keep normal chat fast. Provider failures are handled by the router fallback.
   r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json=payload,timeout=(0.9,2.8)); r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
   if not choices: raise RuntimeError(f'{self.name}: empty response')
   return data
@@ -86,7 +85,9 @@ class MultiProvider(AIProvider):
   self.refresh(); now=time.time(); candidates=[n for n in self.order if self.providers.get(n) and getattr(self.providers.get(n),'enabled',False) and self._cooldown.get(n,0)<=now]
   candidates.sort(key=lambda n:(self._latency.get(n,99.0), self.order.index(n)))
   errors=[]
-  for name in candidates:
+  # Don't walk through a long chain of slow providers during a normal chat.
+  # One fast primary + one fallback keeps failures bounded while retaining resilience.
+  for name in candidates[:2]:
    started=time.monotonic()
    try:
     r=getattr(self.providers[name],method)(*args,**kwargs); elapsed=time.monotonic()-started; old=self._latency.get(name,elapsed); self._latency[name]=old*0.7+elapsed*0.3
