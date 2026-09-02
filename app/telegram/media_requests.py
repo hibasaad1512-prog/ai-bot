@@ -3,53 +3,62 @@ from __future__ import annotations
 import logging
 import re
 import types
+import unicodedata
 
 from app.telegram.permissions import is_group
 
 log = logging.getLogger(__name__)
 
-# Explicit media requests are handled before AI. Supports common Arabic/Darija,
-# English and French forms so the request never gets turned into a random AI reply.
 REQUESTS = {
-    "photo": ("صورة", "صور", "صوره", "صويرة", "تصويرة", "تصويرة", "photo", "photos", "pic", "pics", "image", "images", "photo"),
-    "animation": ("gif", "gifs", "جيڤ", "جيف", "جييف", "انيميشن", "animation", "gif"),
+    "photo": ("صورة", "صور", "صوره", "صويرة", "تصويرة", "تصويره", "photo", "photos", "pic", "pics", "image", "images", "fota"),
+    "animation": ("gif", "جيڤ", "جيف", "جيف", "gifs", "انيميشن", "انميشن", "حركة", "animation"),
     "sticker": ("ستيكر", "ستكر", "ستيكرات", "sticker", "stickers", "ملصق", "ملصقات"),
-    "video": ("فيديو", "فديو", "فيديوهات", "video", "videos", "vid", "vidéo", "videos"),
-    "voice": ("فويس", "فويسات", "صوتية", "صوتيه", "رسالة صوتية", "voice", "voices", "voicenote", "voice note", "vocal"),
-    "audio": ("اغنية", "أغنية", "اغاني", "أغاني", "موسيقى", "audio", "mp3", "song", "musique", "chanson"),
+    "video": ("فيديو", "فديو", "فيديوهات", "video", "videos", "vid", "clip", "clips"),
+    "voice": ("فويس", "فويسات", "صوتية", "صوتيه", "رسالة صوتية", "رساله صوتيه", "voice", "voices", "voicenote"),
+    "audio": ("اغنية", "أغنية", "اغنيه", "أغنيه", "موسيقى", "موسيقي", "audio", "mp3", "song", "music"),
 }
 
+# Include conjugations people actually use in chat: "ترسل", "ترسلي", "رسل", etc.
 REQUEST_WORDS = (
-    "ارسل", "أرسل", "ارسلي", "أرسلي", "ارسللي", "أرسللي", "رسل", "رسلي", "بعث", "بعثلي", "بعت", "بعتلي",
-    "ابعث", "ابعثلي", "ابعت", "ابعتلي", "هات", "هاتلي", "جيب", "جيبلي", "وريني", "عطني", "اعطني", "أعطني",
-    "send", "send me", "show", "show me", "give", "give me", "envoie", "envoie-moi", "envoyer", "donne", "montre",
+    "ارسل", "أرسل", "ارسلي", "أرسلي", "ترسل", "ترسلي", "ترسلها", "ترسليها",
+    "رسل", "رسلي", "رسلها", "رسليها", "بعت", "بعتلي", "بعث", "ابعث", "ابعثي", "ابعت", "ابعتلي",
+    "هات", "هاتلي", "هاتي", "جيب", "جيبي", "وريني", "عطني", "اعطني", "أعطني",
+    "send", "show", "give", "get", "share", "drop",
 )
 
 
+def _normalize(text: str) -> str:
+    s = unicodedata.normalize("NFKC", text or "").lower().strip()
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.replace("ـ", "")
+    return s
+
+
+def _has_word(s: str, word: str) -> bool:
+    # Arabic/Latin chat text often has attached pronouns, so allow a short
+    # suffix after the request verb while still avoiding accidental matches.
+    w = _normalize(word)
+    if not w:
+        return False
+    if re.search(r"(?<!\w)" + re.escape(w) + r"(?:ها|ه|لي|ليها|هم)?(?!\w)", s):
+        return True
+    return False
+
+
 def _requested_type(text: str) -> str | None:
-    s = (text or "").strip().lower()
+    s = _normalize(text)
     if not s:
         return None
-    # A request verb is required for normal words. Also accept very explicit
-    # one-word commands such as "gif" or "sticker" followed by nothing.
-    explicit_only = {"gif", "gifs", "photo", "pic", "image", "sticker", "stickers", "video", "vid", "voice", "vocal", "صورة", "فيديو", "فويس", "ستيكر"}
-    has_verb = any(re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", s) for w in REQUEST_WORDS)
-    if not has_verb and s not in explicit_only:
+    has_request = any(_has_word(s, w) for w in REQUEST_WORDS)
+    if not has_request:
         return None
     for kind, words in REQUESTS.items():
-        if any(re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", s) for w in words):
+        if any(_has_word(s, w) for w in words):
             return kind
     return None
 
 
 def _send(handler, message, media_type: str) -> bool:
-    # The setting is per-group. Default is ON.
-    try:
-        state = handler.rt.db.get_json("chat_state", "chat_id", int(message.chat.id), {})
-        if state.get("media_requests_enabled", True) is False:
-            return False
-    except Exception:
-        pass
     ref = handler.rt.images.choose(message.chat.id, media_type=media_type)
     if not ref:
         return False
@@ -63,7 +72,10 @@ def _send(handler, message, media_type: str) -> bool:
     }.get(media_type)
     if not sender:
         return False
-    sender(message.chat.id, ref.telegram_file_id, reply_to_message_id=message.message_id)
+    try:
+        sender(message.chat.id, ref.telegram_file_id, reply_to_message_id=message.message_id, allow_sending_without_reply=True)
+    except TypeError:
+        sender(message.chat.id, ref.telegram_file_id, reply_to_message_id=message.message_id)
     handler.rt.images.mark_used(ref)
     return True
 
@@ -117,7 +129,6 @@ def _patch_context(handlers) -> None:
         return
 
     def build(instance, message, current_text):
-        # No random old-message callback/remix. Only the actual conversation context.
         return original(message, current_text), "DIRECT_REPLY"
 
     handlers._build_ai_context = types.MethodType(build, handlers)
@@ -141,10 +152,10 @@ def install(handlers) -> None:
             text = getattr(message, "text", None) or getattr(message, "caption", None) or ""
             kind = _requested_type(text)
             if kind:
-                # If media exists, ALWAYS send it directly. Never let AI answer an explicit request.
                 if _send(instance, message, kind):
                     return
-                # No matching item in this group's pool: stay silent rather than inventing a reply.
+                # Keep the request deterministic: don't send an unrelated AI reply.
+                log.info("media requested but pool is empty: chat=%s type=%s", message.chat.id, kind)
                 return
             return original(message)
         except Exception:
