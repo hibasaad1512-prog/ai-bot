@@ -14,6 +14,7 @@ from app.memory.handlers import MemoryHandlers
 from app.worker.scheduler import ProactiveScheduler
 from app.worker.media_automation import MediaAutomation
 from app.storage import register_smart_archive
+from app.images.pool import ImageRef
 log=logging.getLogger(__name__)
 
 class KyoosBot:
@@ -50,6 +51,33 @@ class KyoosBot:
         self.handlers=TelegramHandlers(self.bot,self.runtime)
         self.memory_handlers=MemoryHandlers(self.bot,self.runtime,self.handlers)
         install_social_mix(self.handlers)
+
+        # TelegramHandlers historically registered only text/photo/video/sticker.
+        # Collect the other media types here so the persistent media pool can actually
+        # learn GIFs, voice notes and audio files and later send them spontaneously.
+        @self.bot.message_handler(content_types=['animation','audio','voice'])
+        def collect_extra_media(message):
+            try:
+                if getattr(message.chat,'type','') not in ('group','supergroup'):
+                    return
+                kind=getattr(message,'content_type',None)
+                obj=getattr(message,kind,None) if kind else None
+                file_id=getattr(obj,'file_id',None)
+                if not file_id:
+                    return
+                self.runtime.images.add(ImageRef(
+                    chat_id=message.chat.id,
+                    message_id=message.message_id,
+                    telegram_file_id=file_id,
+                    created_at=message.date or time.time(),
+                    used_at=None,
+                    uploader_id=getattr(getattr(message,'from_user',None),'id',0),
+                    media_type=kind,
+                ))
+                log.debug('media pool learned %s in chat=%s',kind,message.chat.id)
+            except Exception:
+                log.debug('extra media collection failed',exc_info=True)
+
         register_smart_archive(self.runtime)
         self.media_automation=MediaAutomation(self.bot,self.runtime); self.media_automation.start()
         try:self.handlers._bot_username=(self.bot.get_me().username or '').lower()
@@ -109,6 +137,11 @@ class KyoosBot:
 
     def _proactive_tick(self):
         chat_id=self._selected_chat()
-        if chat_id is not None: self.handlers.proactive(chat_id)
+        if chat_id is not None:
+            proactive=getattr(self.handlers,'proactive',None)
+            if callable(proactive):
+                proactive(chat_id)
+            else:
+                log.debug('proactive skipped: handler has no proactive method')
 
     def process(self,update): self.bot.process_new_updates([update])
