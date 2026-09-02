@@ -10,6 +10,7 @@ from app.telegram.owner_controls import register as register_owner_controls
 from app.telegram.moderation import register as register_moderation
 from app.telegram.memory_admin import is_owner, menu as god_menu
 from app.telegram.social_mix import install as install_social_mix
+from app.telegram.media_requests import install as install_media_requests
 from app.memory.handlers import MemoryHandlers
 from app.worker.scheduler import ProactiveScheduler
 from app.worker.media_automation import MediaAutomation
@@ -51,10 +52,10 @@ class KyoosBot:
         self.handlers=TelegramHandlers(self.bot,self.runtime)
         self.memory_handlers=MemoryHandlers(self.bot,self.runtime,self.handlers)
         install_social_mix(self.handlers)
+        # Explicit requests such as "ارسل صورة / GIF / فويس" bypass AI and
+        # immediately send a random matching item from this group's media pool.
+        install_media_requests(self.handlers)
 
-        # TelegramHandlers historically registered only text/photo/video/sticker.
-        # Collect the other media types here so the persistent media pool can actually
-        # learn GIFs, voice notes and audio files and later send them spontaneously.
         @self.bot.message_handler(content_types=['animation','audio','voice'])
         def collect_extra_media(message):
             try:
