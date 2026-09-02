@@ -8,24 +8,33 @@ from app.telegram.permissions import is_group
 
 log = logging.getLogger(__name__)
 
+# Explicit media requests are handled before AI. Supports common Arabic/Darija,
+# English and French forms so the request never gets turned into a random AI reply.
 REQUESTS = {
-    "photo": ("صورة", "صور", "صوره", "صويرة", "photo", "photos", "pic", "pics", "image", "images"),
-    "animation": ("gif", "جيڤ", "جيف", "gifs", "انيميشن", "animation"),
-    "sticker": ("ستيكر", "ستكر", "ستيكرات", "sticker", "stickers", "ملصق"),
-    "video": ("فيديو", "فديو", "فيديوهات", "video", "videos", "vid"),
-    "voice": ("فويس", "فويسات", "صوتية", "voice", "voices", "voicenote", "رسالة صوتية"),
-    "audio": ("اغنية", "أغنية", "موسيقى", "audio", "mp3", "song"),
+    "photo": ("صورة", "صور", "صوره", "صويرة", "تصويرة", "تصويرة", "photo", "photos", "pic", "pics", "image", "images", "photo"),
+    "animation": ("gif", "gifs", "جيڤ", "جيف", "جييف", "انيميشن", "animation", "gif"),
+    "sticker": ("ستيكر", "ستكر", "ستيكرات", "sticker", "stickers", "ملصق", "ملصقات"),
+    "video": ("فيديو", "فديو", "فيديوهات", "video", "videos", "vid", "vidéo", "videos"),
+    "voice": ("فويس", "فويسات", "صوتية", "صوتيه", "رسالة صوتية", "voice", "voices", "voicenote", "voice note", "vocal"),
+    "audio": ("اغنية", "أغنية", "اغاني", "أغاني", "موسيقى", "audio", "mp3", "song", "musique", "chanson"),
 }
 
 REQUEST_WORDS = (
-    "ارسل", "أرسل", "ارسلي", "أرسلي", "بعت", "ابعث", "ابعت", "بعث",
-    "send", "show", "give", "هات", "هاتلي", "جيب", "وريني", "عطني", "اعطني", "أعطني",
+    "ارسل", "أرسل", "ارسلي", "أرسلي", "ارسللي", "أرسللي", "رسل", "رسلي", "بعث", "بعثلي", "بعت", "بعتلي",
+    "ابعث", "ابعثلي", "ابعت", "ابعتلي", "هات", "هاتلي", "جيب", "جيبلي", "وريني", "عطني", "اعطني", "أعطني",
+    "send", "send me", "show", "show me", "give", "give me", "envoie", "envoie-moi", "envoyer", "donne", "montre",
 )
 
 
 def _requested_type(text: str) -> str | None:
     s = (text or "").strip().lower()
-    if not s or not any(w in s for w in REQUEST_WORDS):
+    if not s:
+        return None
+    # A request verb is required for normal words. Also accept very explicit
+    # one-word commands such as "gif" or "sticker" followed by nothing.
+    explicit_only = {"gif", "gifs", "photo", "pic", "image", "sticker", "stickers", "video", "vid", "voice", "vocal", "صورة", "فيديو", "فويس", "ستيكر"}
+    has_verb = any(re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", s) for w in REQUEST_WORDS)
+    if not has_verb and s not in explicit_only:
         return None
     for kind, words in REQUESTS.items():
         if any(re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", s) for w in words):
@@ -34,6 +43,13 @@ def _requested_type(text: str) -> str | None:
 
 
 def _send(handler, message, media_type: str) -> bool:
+    # The setting is per-group. Default is ON.
+    try:
+        state = handler.rt.db.get_json("chat_state", "chat_id", int(message.chat.id), {})
+        if state.get("media_requests_enabled", True) is False:
+            return False
+    except Exception:
+        pass
     ref = handler.rt.images.choose(message.chat.id, media_type=media_type)
     if not ref:
         return False
@@ -47,7 +63,6 @@ def _send(handler, message, media_type: str) -> bool:
     }.get(media_type)
     if not sender:
         return False
-    # Telegram gets the file_id directly: no command, no text dump, no fake URL.
     sender(message.chat.id, ref.telegram_file_id, reply_to_message_id=message.message_id)
     handler.rt.images.mark_used(ref)
     return True
@@ -81,7 +96,6 @@ def _patch_ai(handlers) -> None:
             result = str(original(prompt, system) or "").strip()
             target = _target_from_prompt(prompt)
             if not result or result.lower() in {"none", "null", "nil", "n/a"} or _wrong_script(target, result):
-                # Do not replace an AI failure with an unrelated word/phrase.
                 if re.search(r"[\u0600-\u06ff]", target):
                     return "مفهمتش، عاودها ليا 😭"
                 return "I didn't catch that 😭"
@@ -96,8 +110,6 @@ def _patch_ai(handlers) -> None:
 
 
 def _patch_context(handlers) -> None:
-    # The old handler added random callbacks/remixes from unrelated messages.
-    # Keep normal recent conversation context, but force DIRECT_REPLY mode.
     if getattr(handlers, "_strict_context_guard", False):
         return
     original = getattr(handlers, "_conversation_context", None)
@@ -105,6 +117,7 @@ def _patch_context(handlers) -> None:
         return
 
     def build(instance, message, current_text):
+        # No random old-message callback/remix. Only the actual conversation context.
         return original(message, current_text), "DIRECT_REPLY"
 
     handlers._build_ai_context = types.MethodType(build, handlers)
@@ -125,11 +138,13 @@ def install(handlers) -> None:
         try:
             if not is_group(getattr(message.chat, "type", "")):
                 return original(message)
-            kind = _requested_type(getattr(message, "text", None) or getattr(message, "caption", None) or "")
+            text = getattr(message, "text", None) or getattr(message, "caption", None) or ""
+            kind = _requested_type(text)
             if kind:
+                # If media exists, ALWAYS send it directly. Never let AI answer an explicit request.
                 if _send(instance, message, kind):
                     return
-                # No matching media in this group: don't send a fake command or file id.
+                # No matching item in this group's pool: stay silent rather than inventing a reply.
                 return
             return original(message)
         except Exception:
