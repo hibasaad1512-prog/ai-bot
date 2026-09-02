@@ -10,7 +10,8 @@ def menu()->types.InlineKeyboardMarkup:
     kb.add(
         types.InlineKeyboardButton('🎯 1. Choose Group',callback_data='owner:chats'),
         types.InlineKeyboardButton('🔑 2. AI APIs',callback_data='owner:providers'),
-        types.InlineKeyboardButton('⚡ 3. Activity & Media',callback_data='auto:home'),
+        types.InlineKeyboardButton('🎬 3. Media Settings',callback_data='mediaadmin:home'),
+        types.InlineKeyboardButton('⚡ 4. Activity & Media',callback_data='auto:home'),
         types.InlineKeyboardButton('🧪 Merva Lab',callback_data='mad:open'),
         types.InlineKeyboardButton('🧠 Memory',callback_data='memadmin:memory'),
         types.InlineKeyboardButton('💬 Messages',callback_data='memadmin:messages'),
