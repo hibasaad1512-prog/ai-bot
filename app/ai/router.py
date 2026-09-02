@@ -13,12 +13,13 @@ class OpenAICompatibleProvider(AIProvider):
   if not self.enabled: raise RuntimeError(f'{self.name} is not configured')
   headers={'Authorization':f'Bearer {self.api_key}','Content-Type':'application/json'}
   if self.name=='openrouter': headers.update({'HTTP-Referer':os.getenv('OPENROUTER_HTTP_REFERER','https://localhost'),'X-Title':os.getenv('OPENROUTER_APP_NAME','Merva AI')})
-  payload={'model':self.model,'messages':messages,'max_tokens':96,'stream':False,**extra}
-  r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json=payload,timeout=(0.7,1.8)); r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
+  payload={'model':self.model,'messages':messages,'max_tokens':128,'stream':False,**extra}
+  # Slightly more connection budget prevents false failures on cold/free endpoints.
+  r=requests.post(f'{self.base_url}/chat/completions',headers=headers,json=payload,timeout=(1.2,4.0)); r.raise_for_status(); data=r.json(); choices=data.get('choices') or []
   if not choices: raise RuntimeError(f'{self.name}: empty response')
   return data
  def _messages(self,prompt,system): return ([{'role':'system','content':system}] if system else [])+[{'role':'user','content':prompt}]
- def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=0.3)['choices'][0]['message'].get('content','')).strip()
+ def generate_text(self,prompt,system=None): return str(self._request(self._messages(prompt,system),temperature=0.45)['choices'][0]['message'].get('content','')).strip()
  def generate_structured(self,prompt,schema,system=None): return json.loads(self._request(self._messages(prompt,system),temperature=0,response_format={'type':'json_object'})['choices'][0]['message'].get('content','{}'))
  def analyze_image(self,image_bytes,prompt):
   b64=base64.b64encode(image_bytes).decode(); msg=[{'role':'user','content':[{'type':'text','text':prompt},{'type':'image_url','image_url':{'url':f'data:image/jpeg;base64,{b64}'}}]}]; return str(self._request(msg,temperature=0)['choices'][0]['message'].get('content','')).strip()
@@ -79,6 +80,7 @@ class MultiProvider(AIProvider):
   msg=str(exc).lower(); cooldown=8.0
   if '429' in msg or 'rate' in msg or 'quota' in msg: cooldown=20.0
   elif '401' in msg or '403' in msg or 'invalid api key' in msg or 'authentication' in msg: cooldown=600.0
+  elif 'timeout' in msg or 'timed out' in msg: cooldown=30.0
   self._cooldown[name]=time.time()+cooldown
  def _try(self,method,*args,**kwargs):
   self.refresh(); now=time.time(); candidates=[n for n in self.order if self.providers.get(n) and getattr(self.providers.get(n),'enabled',False) and self._cooldown.get(n,0)<=now]
