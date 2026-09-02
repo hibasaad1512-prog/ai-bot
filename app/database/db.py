@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from sqlalchemy import create_engine, text
@@ -17,7 +18,10 @@ SCHEMA = [
     """CREATE INDEX IF NOT EXISTS idx_chat_messages_recent ON chat_messages(chat_id, timestamp DESC)""",
     """CREATE TABLE IF NOT EXISTS media_pool (chat_id BIGINT NOT NULL, message_id BIGINT NOT NULL, telegram_file_id TEXT NOT NULL, created_at DOUBLE PRECISION NOT NULL, used_at DOUBLE PRECISION, uploader_id BIGINT NOT NULL DEFAULT 0, media_type TEXT NOT NULL, PRIMARY KEY (chat_id, telegram_file_id))""",
     """CREATE INDEX IF NOT EXISTS idx_media_pool_chat ON media_pool(chat_id, created_at DESC)""",
+    """CREATE INDEX IF NOT EXISTS idx_media_pool_used ON media_pool(chat_id, used_at)""",
 ]
+
+_MESSAGE_WRITER = ThreadPoolExecutor(max_workers=2, thread_name_prefix="db-msg")
 
 
 def normalize_database_url(url: str) -> str:
@@ -33,13 +37,20 @@ def normalize_database_url(url: str) -> str:
 class Database:
     def __init__(self, url: str):
         self.url = normalize_database_url(url)
-        self.engine: Engine = create_engine(self.url, pool_pre_ping=True, future=True)
+        self.engine: Engine = create_engine(
+            self.url,
+            pool_pre_ping=True,
+            pool_size=5,
+            max_overflow=5,
+            future=True,
+        )
         self.init()
 
     def init(self) -> None:
         with self.engine.begin() as conn:
             for stmt in SCHEMA:
                 conn.execute(text(stmt))
+        self.prune_stale_storage()
 
     def get_json(self, table: str, key_col: str, key: int, default: dict[str, Any] | None = None) -> dict[str, Any]:
         with self.engine.connect() as conn:
@@ -58,19 +69,30 @@ class Database:
         self._save_json("chat_state", "state_json", chat_id, payload)
 
     def _save_json(self, table: str, column: str, chat_id: int, payload: dict[str, Any]) -> None:
-        now = time.time(); raw = json.dumps(payload, ensure_ascii=False)
+        now = time.time(); raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         with self.engine.begin() as conn:
             conn.execute(text(f"""INSERT INTO {table}(chat_id,{column},updated_at) VALUES (:id,:raw,:ts)
                 ON CONFLICT(chat_id) DO UPDATE SET {column}=:raw, updated_at=:ts"""), {"id": chat_id, "raw": raw, "ts": now})
 
     def save_message(self, message: ChatMessage) -> None:
-        with self.engine.begin() as conn:
-            conn.execute(text("""INSERT INTO chat_messages(chat_id,message_id,user_id,display_name,timestamp,text,reply_to_message_id,media_type,image_file_id,is_bot)
-                VALUES(:chat_id,:message_id,:user_id,:display_name,:timestamp,:text,:reply_to_message_id,:media_type,:image_file_id,:is_bot)
-                ON CONFLICT(chat_id,message_id) DO UPDATE SET user_id=:user_id,display_name=:display_name,timestamp=:timestamp,text=:text,reply_to_message_id=:reply_to_message_id,media_type=:media_type,image_file_id=:image_file_id,is_bot=:is_bot"""), message.as_dict())
+        # Message persistence is deliberately off the Telegram reply path.
+        payload = message.as_dict()
+        try:
+            _MESSAGE_WRITER.submit(self._save_message_sync, payload)
+        except Exception:
+            pass
 
-    def recent_messages(self, chat_id: int, limit: int = 40) -> list[ChatMessage]:
-        limit = max(1, min(int(limit), 200))
+    def _save_message_sync(self, payload: dict[str, Any]) -> None:
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(text("""INSERT INTO chat_messages(chat_id,message_id,user_id,display_name,timestamp,text,reply_to_message_id,media_type,image_file_id,is_bot)
+                    VALUES(:chat_id,:message_id,:user_id,:display_name,:timestamp,:text,:reply_to_message_id,:media_type,:image_file_id,:is_bot)
+                    ON CONFLICT(chat_id,message_id) DO UPDATE SET user_id=:user_id,display_name=:display_name,timestamp=:timestamp,text=:text,reply_to_message_id=:reply_to_message_id,media_type=:media_type,image_file_id=:image_file_id,is_bot=:is_bot"""), payload)
+        except Exception:
+            pass
+
+    def recent_messages(self, chat_id: int, limit: int = 24) -> list[ChatMessage]:
+        limit = max(1, min(int(limit), 100))
         with self.engine.connect() as conn:
             rows = conn.execute(text("""SELECT chat_id,message_id,user_id,display_name,timestamp,text,reply_to_message_id,media_type,image_file_id,is_bot
                 FROM chat_messages WHERE chat_id=:chat_id ORDER BY timestamp DESC LIMIT :limit"""), {"chat_id": chat_id, "limit": limit}).mappings().all()
@@ -98,7 +120,7 @@ class Database:
                 "chat_id":ref.chat_id,"message_id":ref.message_id,"file_id":ref.telegram_file_id,"created_at":ref.created_at,"used_at":ref.used_at,"uploader_id":ref.uploader_id,"media_type":ref.media_type})
 
     def list_media(self, chat_id: int, limit: int = 100) -> list[dict[str, Any]]:
-        limit=max(1,min(int(limit),500))
+        limit=max(1,min(int(limit),300))
         with self.engine.connect() as conn:
             rows=conn.execute(text("""SELECT chat_id,message_id,telegram_file_id,created_at,used_at,uploader_id,media_type
                 FROM media_pool WHERE chat_id=:chat_id ORDER BY created_at DESC LIMIT :limit"""),{"chat_id":chat_id,"limit":limit}).mappings().all()
@@ -132,3 +154,17 @@ class Database:
         with self.engine.begin() as conn:
             r=conn.execute(text("DELETE FROM chat_messages WHERE chat_id=:id"), {"id":chat_id})
         return int(r.rowcount or 0)
+
+    def prune_stale_storage(self) -> None:
+        """Remove data that cannot improve current replies and only bloats storage."""
+        now = time.time()
+        message_cutoff = now - 14 * 86400
+        media_cutoff = now - 3 * 86400
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(text("DELETE FROM chat_messages WHERE timestamp < :cutoff"), {"cutoff": message_cutoff})
+                conn.execute(text("DELETE FROM media_pool WHERE used_at IS NOT NULL AND used_at < :cutoff"), {"cutoff": media_cutoff})
+                # Remove orphaned per-chat state for chats that have completely disappeared.
+                conn.execute(text("DELETE FROM chat_state WHERE chat_id < 0 AND chat_id NOT IN (SELECT DISTINCT chat_id FROM chat_messages WHERE chat_id < 0)"))
+        except Exception:
+            pass
