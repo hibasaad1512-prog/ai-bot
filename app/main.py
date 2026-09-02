@@ -3,18 +3,18 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import threading
+import time
 
 from flask import Flask, abort, request
 
+import requests
 import telebot
 
 from app.config import settings
 from app.telegram.bot import KyoosBot
 from app.ai.fast_patch import install as install_fast_groq
 
-# Install before the first Runtime/KyoosBot instance is created.
-# The patch keeps the provider lock away from the network call, allowing
-# multiple Telegram messages to be answered concurrently.
 install_fast_groq()
 
 logging.basicConfig(
@@ -37,8 +37,6 @@ def bot_instance() -> KyoosBot:
 @app.get("/")
 @app.get("/health")
 def health():
-    # IMPORTANT: do not return health before initializing the Telegram bot.
-    # Render hits this endpoint, and this is what triggers webhook registration.
     bot = bot_instance()
     return {
         "status": "ok",
@@ -47,6 +45,15 @@ def health():
         "groq": bot.runtime.ai.enabled,
         "webhook_base": bool(settings.public_base_url),
     }
+
+
+def _process_update(raw_body: str) -> None:
+    """Process Telegram updates outside the HTTP request."""
+    try:
+        update = telebot.types.Update.de_json(raw_body)
+        bot_instance().process(update)
+    except Exception:
+        log.exception("background webhook processing failed")
 
 
 @app.post("/telegram/webhook")
@@ -58,13 +65,14 @@ def telegram_webhook():
     if not request.is_json:
         abort(400)
 
-    try:
-        update = telebot.types.Update.de_json(request.get_data(as_text=True))
-        bot_instance().process(update)
-        return {"ok": True}
-    except Exception:
-        log.exception("webhook failure")
-        abort(500)
+    raw_body = request.get_data(as_text=True)
+    threading.Thread(
+        target=_process_update,
+        args=(raw_body,),
+        daemon=True,
+        name="telegram-update",
+    ).start()
+    return {"ok": True}
 
 
 @app.get("/debug")
@@ -86,6 +94,26 @@ def set_webhook():
     url = f"{settings.public_base_url}/telegram/webhook"
     b.set_webhook(url=url, secret_token=settings.webhook_secret or None)
     print(url)
+
+
+def _keepalive_loop() -> None:
+    """Keep the free Render instance warm enough for scheduled behavior."""
+    if os.getenv("KEEPALIVE_ENABLED", "true").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+    base = settings.public_base_url
+    if not base:
+        return
+    interval = max(300, int(os.getenv("KEEPALIVE_INTERVAL_SECONDS", "600")))
+    time.sleep(60)
+    while True:
+        try:
+            requests.get(f"{base}/", timeout=8)
+        except Exception:
+            log.debug("keepalive ping failed", exc_info=True)
+        time.sleep(interval)
+
+
+threading.Thread(target=_keepalive_loop, daemon=True, name="render-keepalive").start()
 
 
 if __name__ == "__main__":
