@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import logging
 import re
 import types
@@ -26,8 +27,10 @@ REQUEST_WORDS = (
 
 REPLAY_WORDS = (
     "كرر", "كرري", "كرره", "كررها", "عاود", "عاودي", "عاودها", "رجع", "رجعي", "رجعها", "أعد", "اعد", "أعيد", "اعيد",
-    "replay", "repeat", "resend", "again",
+    "ارسلها", "ارسله", "رسلها", "ترسلها", "بعتليها", "ابعتليها", "replay", "repeat", "resend", "again",
 )
+
+MEDIA_TYPES = ("photo", "video", "sticker", "animation", "audio", "voice")
 
 
 def _normalize(text: str) -> str:
@@ -79,24 +82,73 @@ def _send_file(handler, message, media_type: str, file_id: str) -> bool:
     if not sender or not file_id:
         return False
     try:
-        sender(message.chat.id, file_id, reply_to_message_id=message.message_id, allow_sending_without_reply=True)
-    except TypeError:
-        sender(message.chat.id, file_id, reply_to_message_id=message.message_id)
-    return True
+        try:
+            sender(message.chat.id, file_id, reply_to_message_id=message.message_id, allow_sending_without_reply=True)
+        except TypeError:
+            sender(message.chat.id, file_id, reply_to_message_id=message.message_id)
+        return True
+    except Exception:
+        log.warning("media send failed chat=%s type=%s", getattr(message.chat, "id", None), media_type, exc_info=True)
+        return False
+
+
+def _memory_media(handler, message, media_type: str | None = None):
+    """Find media already learned from this group, including persisted history."""
+    try:
+        recent = handler.rt.memory.recent(message.chat.id, 80)
+    except Exception:
+        return None
+    for item in reversed(recent):
+        if not getattr(item, "image_file_id", None):
+            continue
+        if media_type and getattr(item, "media_type", None) != media_type:
+            continue
+        if getattr(item, "is_bot", False):
+            continue
+        return item
+    return None
+
+
+def _send_from_memory(handler, message, media_type: str | None = None, message_id: int | None = None) -> bool:
+    try:
+        recent = handler.rt.memory.recent(message.chat.id, 120)
+    except Exception:
+        return False
+    for item in reversed(recent):
+        if getattr(item, "is_bot", False) or not getattr(item, "image_file_id", None):
+            continue
+        if message_id is not None and int(getattr(item, "message_id", -1)) != int(message_id):
+            continue
+        kind = getattr(item, "media_type", None)
+        if kind not in MEDIA_TYPES or (media_type and kind != media_type):
+            continue
+        if _send_file(handler, message, kind, item.image_file_id):
+            return True
+    return False
 
 
 def _send(handler, message, media_type: str) -> bool:
-    ref = handler.rt.images.choose(message.chat.id, media_type=media_type)
-    if not ref:
-        return False
-    if not _send_file(handler, message, media_type, ref.telegram_file_id):
-        return False
-    handler.rt.images.mark_used(ref)
-    return True
+    # Memory is checked first: it contains the exact file_id learned from the
+    # actual Telegram message, and also survives a pool cache miss.
+    ref = _memory_media(handler, message, media_type)
+    if ref and _send_file(handler, message, media_type, ref.image_file_id):
+        return True
+
+    # Try several pool candidates instead of giving up on the first stale file_id.
+    tried: set[str] = set()
+    for _ in range(4):
+        ref = handler.rt.images.choose(message.chat.id, media_type=media_type, avoid_file_ids=tried)
+        if not ref:
+            break
+        tried.add(ref.telegram_file_id)
+        if _send_file(handler, message, media_type, ref.telegram_file_id):
+            handler.rt.images.mark_used(ref)
+            return True
+    return False
 
 
 def _reply_media_kind(reply) -> str | None:
-    for kind in ("photo", "video", "sticker", "animation", "audio", "voice"):
+    for kind in MEDIA_TYPES:
         if _file_from_media(reply, kind):
             return kind
     return None
@@ -107,9 +159,12 @@ def _send_replied(handler, message, media_type: str | None = None) -> bool:
     if not reply:
         return False
     kind = media_type or _reply_media_kind(reply)
-    if not kind:
-        return False
-    return _send_file(handler, message, kind, _file_from_media(reply, kind))
+    if kind and _send_file(handler, message, kind, _file_from_media(reply, kind)):
+        return True
+    # Telegram may give us only the reply's message_id in some restricted cases;
+    # fall back to our already-stored ChatMessage/file_id.
+    rid = getattr(reply, "message_id", None)
+    return bool(rid is not None and _send_from_memory(handler, message, media_type, rid))
 
 
 def _send_replied_text(handler, message) -> bool:
@@ -123,13 +178,12 @@ def _send_replied_text(handler, message) -> bool:
         handler.bot.send_message(message.chat.id, text, reply_to_message_id=message.message_id, allow_sending_without_reply=True)
     except TypeError:
         handler.bot.send_message(message.chat.id, text, reply_to_message_id=message.message_id)
+    except Exception:
+        return False
     return True
 
 
 def _replay_reply(handler, message) -> bool:
-    # Reply-first behavior is deliberately independent of the persistent pool.
-    # This makes "كررها/ارسلها" work in private/restricted groups whenever the
-    # original message is actually delivered to the bot by Telegram.
     if _send_replied(handler, message):
         return True
     return _send_replied_text(handler, message)
@@ -140,13 +194,37 @@ def _target_from_prompt(prompt: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def _wrong_script(target: str, reply: str) -> bool:
-    if not target or not reply:
+def _strip_emoji_spam(text: str) -> str:
+    # Keep at most one emoji. This is deterministic and prevents the model from
+    # turning every answer into an emoji-heavy/cringe reply.
+    if not text:
+        return text
+    emoji_re = re.compile(r"[\U0001F1E6-\U0001FAFF\u2600-\u27BF\uFE0F\u200D]")
+    seen = 0
+    out = []
+    for ch in text:
+        if emoji_re.match(ch):
+            if seen:
+                continue
+            seen += 1
+        out.append(ch)
+    return "".join(out).strip()
+
+
+def _reply_is_duplicate(handler, chat_id: int, reply: str) -> bool:
+    norm = re.sub(r"\s+", " ", _normalize(reply)).strip()
+    if len(norm) < 8:
         return False
-    if re.search(r"[\u0600-\u06ff]", target):
-        return bool(re.search(r"[\u0400-\u04ff\u0370-\u03ff\u0590-\u05ff\u0900-\u097f\u3040-\u30ff\u4e00-\u9fff]", reply))
-    if re.search(r"[A-Za-z]", target):
-        return bool(re.search(r"[\u0400-\u04ff\u0370-\u03ff\u0590-\u05ff\u0900-\u097f\u3040-\u30ff\u4e00-\u9fff]", reply))
+    try:
+        recent = handler.rt.memory.recent(chat_id, 12)
+    except Exception:
+        return False
+    for item in reversed(recent):
+        if not getattr(item, "is_bot", False) or not getattr(item, "text", None):
+            continue
+        old = re.sub(r"\s+", " ", _normalize(item.text)).strip()
+        if norm == old or difflib.SequenceMatcher(None, norm, old).ratio() >= 0.88:
+            return True
     return False
 
 
@@ -159,14 +237,21 @@ def _patch_ai(handlers) -> None:
         return
 
     def safe_generate(instance, prompt, system=None):
+        target = _target_from_prompt(prompt)
         try:
             result = str(original(prompt, system) or "").strip()
-            target = _target_from_prompt(prompt)
             if not result or result.lower() in {"none", "null", "nil", "n/a"} or _wrong_script(target, result):
-                return "مفهمتش، عاودها ليا" if re.search(r"[\u0600-\u06ff]", target) else "I didn't catch that"
+                return "מفهمتش، عاودها ليا" if re.search(r"[\u0600-\u06ff]", target) else "I didn't catch that"
+
+            result = _strip_emoji_spam(result)
+            if _reply_is_duplicate(instance, getattr(getattr(instance, "_last_ai_message", None), "chat_id", 0), result):
+                retry_system = (system or "") + "\nCRITICAL: Your previous candidate repeated a recent bot reply. Write a genuinely different short reply; do not reuse its wording or punchline."
+                fresh = str(original(prompt, retry_system) or "").strip()
+                fresh = _strip_emoji_spam(fresh)
+                if fresh and not _wrong_script(target, fresh) and not _reply_is_duplicate(instance, getattr(getattr(instance, "_last_ai_message", None), "chat_id", 0), fresh):
+                    result = fresh
             return result
         except Exception:
-            target = _target_from_prompt(prompt)
             return "مفهمتش، عاودها ليا" if re.search(r"[\u0600-\u06ff]", target) else "I didn't catch that"
 
     ai.generate_text = types.MethodType(safe_generate, ai)
@@ -179,10 +264,8 @@ def _patch_context(handlers) -> None:
     original = getattr(handlers, "_conversation_context", None)
     if not callable(original):
         return
-
     def build(instance, message, current_text):
         return original(message, current_text), "DIRECT_REPLY"
-
     handlers._build_ai_context = types.MethodType(build, handlers)
     handlers._strict_context_guard = True
 
@@ -196,40 +279,48 @@ def install(handlers) -> None:
     _patch_ai(handlers)
     _patch_context(handlers)
 
+    # The AI wrapper needs the current chat id for local duplicate detection.
+    # Store it on the handler immediately before generation is reached.
+    old_on_message = original
+
     def wrapped(instance, message):
         try:
             if not is_group(getattr(message.chat, "type", "")):
-                return original(message)
+                return old_on_message(message)
             text = getattr(message, "text", None) or getattr(message, "caption", None) or ""
+            state = {}
+            try:
+                state = instance.rt.db.get_json("chat_state", "chat_id", int(message.chat.id), {})
+            except Exception:
+                pass
+            if state.get("media_requests_enabled", True) is False:
+                return old_on_message(message)
 
-            # Highest-priority replay path: when the user replies to something,
-            # prefer the exact Telegram message over an unrelated item from the pool.
-            if _is_replay_request(text) and getattr(message, "reply_to_message", None):
-                try:
-                    state = instance.rt.db.get_json("chat_state", "chat_id", int(message.chat.id), {})
-                    if state.get("media_requests_enabled", True) is not False and _replay_reply(instance, message):
-                        return
-                except Exception:
-                    pass
+            # Exact reply/replay has absolute priority over AI.
+            if getattr(message, "reply_to_message", None) and (_is_replay_request(text) or _requested_type(text)):
+                if _send_replied(instance, message, _requested_type(text)):
+                    return
+                if _is_replay_request(text) and _replay_reply(instance, message):
+                    return
 
             kind = _requested_type(text)
             if kind:
-                try:
-                    state = instance.rt.db.get_json("chat_state", "chat_id", int(message.chat.id), {})
-                    if state.get("media_requests_enabled", True) is False:
-                        return
-                except Exception:
-                    pass
-                # If this is a reply, exact media wins; otherwise use the group's pool.
-                if _send_replied(instance, message, kind) or _send(instance, message, kind):
+                if _send(instance, message, kind):
                     return
+                # An explicit media request must never fall through to unrelated AI.
                 log.info("media requested but unavailable: chat=%s type=%s", message.chat.id, kind)
                 return
 
-            return original(message)
+            # Remember the current chat so the duplicate guard can compare against
+            # the right group's recent bot replies without another AI call.
+            try:
+                instance._last_ai_message = message
+            except Exception:
+                pass
+            return old_on_message(message)
         except Exception:
             log.exception("explicit media/replay request failed")
-            return original(message)
+            return old_on_message(message)
 
     handlers.on_message = types.MethodType(wrapped, handlers)
     handlers._media_requests_installed = True
