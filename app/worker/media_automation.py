@@ -30,9 +30,9 @@ class MediaAutomation:
     def _ensure_defaults(self,chat_id:int):
         s=self.state(chat_id)
         s.setdefault('auto_media_enabled',True); s.setdefault('auto_text_enabled',False)
-        s.setdefault('auto_media_interval_min',15); s.setdefault('auto_media_interval_max',60)
+        s.setdefault('auto_media_interval_min',120); s.setdefault('auto_media_interval_max',300)
         s.setdefault('auto_media_delete_after_send',False); s.setdefault('auto_media_next_at',0); s.setdefault('auto_text_next_at',0)
-        s.setdefault('active_media_enabled',True); s.setdefault('active_media_min_gap',8); s.setdefault('active_media_max_gap',25); s.setdefault('active_media_next_at',0)
+        s.setdefault('active_media_enabled',True); s.setdefault('active_media_min_gap',20); s.setdefault('active_media_max_gap',60); s.setdefault('active_media_next_at',0)
         self.rt.db.save_state(chat_id,s); return s
     def keyboard(self,chat_id:int):
         s=self._ensure_defaults(chat_id); media=bool(s.get('auto_media_enabled')); text=bool(s.get('auto_text_enabled')); cleanup=bool(s.get('auto_media_delete_after_send')); pulse=bool(s.get('active_media_enabled'))
@@ -45,7 +45,7 @@ class MediaAutomation:
         return kb
     def text(self,chat_id:int)->str:
         s=self._ensure_defaults(chat_id)
-        return ('🤖 AUTO SEND\n\n'+f'Media: {"ON 🟢" if s.get("auto_media_enabled") else "OFF 🔴"}\n'+f'Text: {"ON 🟢" if s.get("auto_text_enabled") else "OFF 🔴"}\n'+f'Active pulse: {"ON 🟢" if s.get("active_media_enabled") else "OFF 🔴"}\n'+f'Scheduled interval: {int(s.get("auto_media_interval_min",15))}–{int(s.get("auto_media_interval_max",60))} min\n'+f'Active pulse gap: {int(s.get("active_media_min_gap",8))}–{int(s.get("active_media_max_gap",25))} min\n'+f'Delete media after send: {"ON" if s.get("auto_media_delete_after_send") else "OFF"}\n'+f'Stored media: {self.rt.db.media_count(chat_id)}')
+        return ('🤖 AUTO SEND\n\n'+f'Media: {"ON 🟢" if s.get("auto_media_enabled") else "OFF 🔴"}\n'+f'Text: {"ON 🟢" if s.get("auto_text_enabled") else "OFF 🔴"}\n'+f'Active pulse: {"ON 🟢" if s.get("active_media_enabled") else "OFF 🔴"}\n'+f'Scheduled interval: {int(s.get("auto_media_interval_min",120))}–{int(s.get("auto_media_interval_max",300))} min\n'+f'Active pulse gap: {int(s.get("active_media_min_gap",20))}–{int(s.get("active_media_max_gap",60))} min\n'+f'Delete media after send: {"ON" if s.get("auto_media_delete_after_send") else "OFF"}\n'+f'Stored media: {self.rt.db.media_count(chat_id)}')
     def register(self):
         @self.bot.message_handler(content_types=['photo','video','sticker','animation','audio','voice'],func=lambda m:getattr(getattr(m,'chat',None),'type','') in ('group','supergroup'))
         def collect_media(m):
@@ -116,22 +116,22 @@ class MediaAutomation:
             if not candidates:return False
             self.bot.send_message(chat_id,random.choice(candidates));return True
         except Exception:log.exception('automatic text send failed for %s',chat_id);return False
-    def _human_recent(self,chat_id:int,seconds:int=180)->bool:
+    def _human_recent(self,chat_id:int,seconds:int=300)->bool:
         try:
             recent=self.rt.memory.recent(chat_id,25); now=time.time()
             return any((not x.is_bot) and x.timestamp and now-float(x.timestamp)<=seconds for x in recent)
         except Exception:return False
     def _active_pulse(self,chat_id:int,s:dict,now:float)->bool:
         if not bool(s.get('active_media_enabled')) or not bool(s.get('auto_media_enabled')): return False
-        if not self._human_recent(chat_id,180): return False
+        if not self._human_recent(chat_id,300): return False
         if now < float(s.get('active_media_next_at',0) or 0): return False
-        if random.random() > 0.25: return False
+        if random.random() > 0.20: return False
         ref=self.rt.images.choose_random_media(chat_id)
         if not ref:return False
         try:
             if not self._send_media(chat_id,ref):return False
             if s.get('auto_media_delete_after_send'):self.rt.images.remove(ref)
-            lo=max(8,int(s.get('active_media_min_gap',8))); hi=max(lo,int(s.get('active_media_max_gap',25)))
+            lo=max(20,int(s.get('active_media_min_gap',20))); hi=max(lo,int(s.get('active_media_max_gap',60)))
             self.save(chat_id,active_media_next_at=now+random.randint(lo*60,hi*60))
             return True
         except Exception:log.exception('active media pulse failed for %s',chat_id); return False
@@ -142,7 +142,7 @@ class MediaAutomation:
         if not(media_on or text_on):return
         now=time.time()
         if self._active_pulse(chat_id,s,now): return
-        lo=max(1,int(s.get('auto_media_interval_min',15)));hi=max(lo,int(s.get('auto_media_interval_max',60)))
+        lo=max(1,int(s.get('auto_media_interval_min',120)));hi=max(lo,int(s.get('auto_media_interval_max',300)))
         if now<float(s.get('auto_media_next_at',0) or 0) and now<float(s.get('auto_text_next_at',0) or 0):return
         next_at=now+random.randint(lo*60,hi*60);self.save(chat_id,auto_media_next_at=next_at,auto_text_next_at=next_at)
         if media_on and text_on:
