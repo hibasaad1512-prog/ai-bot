@@ -37,13 +37,7 @@ def normalize_database_url(url: str) -> str:
 class Database:
     def __init__(self, url: str):
         self.url = normalize_database_url(url)
-        self.engine: Engine = create_engine(
-            self.url,
-            pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=5,
-            future=True,
-        )
+        self.engine: Engine = create_engine(self.url, pool_pre_ping=True, pool_size=5, max_overflow=5, future=True)
         self.init()
 
     def init(self) -> None:
@@ -63,6 +57,14 @@ class Database:
             return default or {}
 
     def save_chat_settings(self, chat_id: int, payload: dict[str, Any]) -> None:
+        # Root settings are shared by multiple subsystems; merge instead of letting
+        # one subsystem accidentally erase another subsystem's settings.
+        if int(chat_id) == 0:
+            current = self.get_json("chat_settings", "chat_id", 0, {})
+            if isinstance(current, dict):
+                merged = dict(current)
+                merged.update(payload)
+                payload = merged
         self._save_json("chat_settings", "settings_json", chat_id, payload)
 
     def save_state(self, chat_id: int, payload: dict[str, Any]) -> None:
@@ -75,7 +77,6 @@ class Database:
                 ON CONFLICT(chat_id) DO UPDATE SET {column}=:raw, updated_at=:ts"""), {"id": chat_id, "raw": raw, "ts": now})
 
     def save_message(self, message: ChatMessage) -> None:
-        # Message persistence is deliberately off the Telegram reply path.
         payload = message.as_dict()
         try:
             _MESSAGE_WRITER.submit(self._save_message_sync, payload)
@@ -111,7 +112,6 @@ class Database:
                 ON CONFLICT(chat_id,user_id) DO UPDATE SET points=:p,wins=:w,games_played=:g"""), {"c":chat_id,"u":user_id,"p":p,"w":w,"g":g})
             return {"points":p,"wins":w,"games_played":g}
 
-    # ---------------- Persistent media pool ----------------
     def save_media(self, ref) -> None:
         with self.engine.begin() as conn:
             conn.execute(text("""INSERT INTO media_pool(chat_id,message_id,telegram_file_id,created_at,used_at,uploader_id,media_type)
@@ -156,7 +156,7 @@ class Database:
         return int(r.rowcount or 0)
 
     def prune_stale_storage(self) -> None:
-        """Remove data that cannot improve current replies and only bloats storage."""
+        """Remove stale data that cannot improve current replies."""
         now = time.time()
         message_cutoff = now - 14 * 86400
         media_cutoff = now - 3 * 86400
@@ -164,7 +164,5 @@ class Database:
             with self.engine.begin() as conn:
                 conn.execute(text("DELETE FROM chat_messages WHERE timestamp < :cutoff"), {"cutoff": message_cutoff})
                 conn.execute(text("DELETE FROM media_pool WHERE used_at IS NOT NULL AND used_at < :cutoff"), {"cutoff": media_cutoff})
-                # Remove orphaned per-chat state for chats that have completely disappeared.
-                conn.execute(text("DELETE FROM chat_state WHERE chat_id < 0 AND chat_id NOT IN (SELECT DISTINCT chat_id FROM chat_messages WHERE chat_id < 0)"))
         except Exception:
             pass
