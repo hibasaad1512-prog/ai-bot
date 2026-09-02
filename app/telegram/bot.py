@@ -29,7 +29,7 @@ class KyoosBot:
         @self.bot.message_handler(commands=['start'])
         def public_start(message):
             if getattr(message.chat,'type','') in ('group','supergroup'):
-                self.bot.reply_to(message,'yo, what\'s up?')
+                self.bot.reply_to(message,'Hey, I\'m Merva.')
                 return
             kb=telebot.types.InlineKeyboardMarkup(row_width=1)
             try: username=getattr(self.bot.get_me(),'username',None)
