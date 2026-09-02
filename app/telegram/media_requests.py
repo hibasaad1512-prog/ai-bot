@@ -24,6 +24,11 @@ REQUEST_WORDS = (
     "هات", "هاتلي", "هاتي", "جيب", "جيبي", "وريني", "عطني", "اعطني", "أعطني", "send", "show", "give", "get", "share", "drop",
 )
 
+REPLAY_WORDS = (
+    "كرر", "كرري", "كرره", "كررها", "عاود", "عاودي", "عاودها", "رجع", "رجعي", "رجعها", "أعد", "اعد", "أعيد", "اعيد",
+    "replay", "repeat", "resend", "again",
+)
+
 
 def _normalize(text: str) -> str:
     s = unicodedata.normalize("NFKC", text or "").lower().strip()
@@ -38,41 +43,96 @@ def _has_word(s: str, word: str) -> bool:
 
 def _requested_type(text: str) -> str | None:
     s = _normalize(text)
-    if not s or not any(_has_word(s, w) for w in REQUEST_WORDS): return None
+    if not s or not any(_has_word(s, w) for w in REQUEST_WORDS):
+        return None
     for kind, words in REQUESTS.items():
-        if any(_has_word(s, w) for w in words): return kind
+        if any(_has_word(s, w) for w in words):
+            return kind
     return None
+
+
+def _is_replay_request(text: str) -> bool:
+    s = _normalize(text)
+    return bool(s and any(_has_word(s, w) for w in REPLAY_WORDS))
 
 
 def _file_from_media(message, media_type: str):
     obj = getattr(message, media_type, None)
-    if media_type == "photo" and obj: return obj[-1].file_id
+    if media_type == "photo" and obj:
+        return obj[-1].file_id
     return getattr(obj, "file_id", None) if obj else None
+
+
+def _sender(handler, media_type: str):
+    return {
+        "photo": handler.bot.send_photo,
+        "animation": handler.bot.send_animation,
+        "sticker": handler.bot.send_sticker,
+        "video": handler.bot.send_video,
+        "voice": handler.bot.send_voice,
+        "audio": handler.bot.send_audio,
+    }.get(media_type)
+
+
+def _send_file(handler, message, media_type: str, file_id: str) -> bool:
+    sender = _sender(handler, media_type)
+    if not sender or not file_id:
+        return False
+    try:
+        sender(message.chat.id, file_id, reply_to_message_id=message.message_id, allow_sending_without_reply=True)
+    except TypeError:
+        sender(message.chat.id, file_id, reply_to_message_id=message.message_id)
+    return True
 
 
 def _send(handler, message, media_type: str) -> bool:
     ref = handler.rt.images.choose(message.chat.id, media_type=media_type)
-    if not ref: return False
-    sender = {"photo": handler.bot.send_photo, "animation": handler.bot.send_animation, "sticker": handler.bot.send_sticker,
-              "video": handler.bot.send_video, "voice": handler.bot.send_voice, "audio": handler.bot.send_audio}.get(media_type)
-    if not sender: return False
-    try: sender(message.chat.id, ref.telegram_file_id, reply_to_message_id=message.message_id, allow_sending_without_reply=True)
-    except TypeError: sender(message.chat.id, ref.telegram_file_id, reply_to_message_id=message.message_id)
+    if not ref:
+        return False
+    if not _send_file(handler, message, media_type, ref.telegram_file_id):
+        return False
     handler.rt.images.mark_used(ref)
     return True
 
 
-def _send_replied(handler, message, media_type: str) -> bool:
+def _reply_media_kind(reply) -> str | None:
+    for kind in ("photo", "video", "sticker", "animation", "audio", "voice"):
+        if _file_from_media(reply, kind):
+            return kind
+    return None
+
+
+def _send_replied(handler, message, media_type: str | None = None) -> bool:
     reply = getattr(message, "reply_to_message", None)
-    if not reply: return False
-    file_id = _file_from_media(reply, media_type)
-    if not file_id: return False
-    sender = {"photo": handler.bot.send_photo, "animation": handler.bot.send_animation, "sticker": handler.bot.send_sticker,
-              "video": handler.bot.send_video, "voice": handler.bot.send_voice, "audio": handler.bot.send_audio}.get(media_type)
-    if not sender: return False
-    try: sender(message.chat.id, file_id, reply_to_message_id=message.message_id, allow_sending_without_reply=True)
-    except TypeError: sender(message.chat.id, file_id, reply_to_message_id=message.message_id)
+    if not reply:
+        return False
+    kind = media_type or _reply_media_kind(reply)
+    if not kind:
+        return False
+    return _send_file(handler, message, kind, _file_from_media(reply, kind))
+
+
+def _send_replied_text(handler, message) -> bool:
+    reply = getattr(message, "reply_to_message", None)
+    if not reply:
+        return False
+    text = getattr(reply, "text", None) or getattr(reply, "caption", None) or ""
+    if not text.strip():
+        return False
+    try:
+        handler.bot.send_message(message.chat.id, text, reply_to_message_id=message.message_id, allow_sending_without_reply=True)
+    except TypeError:
+        handler.bot.send_message(message.chat.id, text, reply_to_message_id=message.message_id)
     return True
+
+
+def _replay_reply(handler, message) -> bool:
+    # Reply-first behavior is deliberately independent of the persistent pool.
+    # This makes "كررها/ارسلها" work in private/restricted groups whenever the
+    # original message is actually delivered to the bot by Telegram.
+    if _send_replied(handler, message):
+        return True
+    return _send_replied_text(handler, message)
 
 
 def _target_from_prompt(prompt: str) -> str:
@@ -81,58 +141,95 @@ def _target_from_prompt(prompt: str) -> str:
 
 
 def _wrong_script(target: str, reply: str) -> bool:
-    if not target or not reply: return False
-    if re.search(r"[\u0600-\u06ff]", target): return bool(re.search(r"[\u0400-\u04ff\u0370-\u03ff\u0590-\u05ff\u0900-\u097f\u3040-\u30ff\u4e00-\u9fff]", reply))
-    if re.search(r"[A-Za-z]", target): return bool(re.search(r"[\u0400-\u04ff\u0370-\u03ff\u0590-\u05ff\u0900-\u097f\u3040-\u30ff\u4e00-\u9fff]", reply))
+    if not target or not reply:
+        return False
+    if re.search(r"[\u0600-\u06ff]", target):
+        return bool(re.search(r"[\u0400-\u04ff\u0370-\u03ff\u0590-\u05ff\u0900-\u097f\u3040-\u30ff\u4e00-\u9fff]", reply))
+    if re.search(r"[A-Za-z]", target):
+        return bool(re.search(r"[\u0400-\u04ff\u0370-\u03ff\u0590-\u05ff\u0900-\u097f\u3040-\u30ff\u4e00-\u9fff]", reply))
     return False
 
 
 def _patch_ai(handlers) -> None:
     ai = getattr(handlers.rt, "ai", None)
-    if not ai or getattr(ai, "_strict_social_guard", False): return
+    if not ai or getattr(ai, "_strict_social_guard", False):
+        return
     original = getattr(ai, "generate_text", None)
-    if not callable(original): return
+    if not callable(original):
+        return
+
     def safe_generate(instance, prompt, system=None):
         try:
-            result = str(original(prompt, system) or "").strip(); target = _target_from_prompt(prompt)
+            result = str(original(prompt, system) or "").strip()
+            target = _target_from_prompt(prompt)
             if not result or result.lower() in {"none", "null", "nil", "n/a"} or _wrong_script(target, result):
                 return "مفهمتش، عاودها ليا" if re.search(r"[\u0600-\u06ff]", target) else "I didn't catch that"
             return result
         except Exception:
             target = _target_from_prompt(prompt)
             return "مفهمتش، عاودها ليا" if re.search(r"[\u0600-\u06ff]", target) else "I didn't catch that"
-    ai.generate_text = types.MethodType(safe_generate, ai); ai._strict_social_guard = True
+
+    ai.generate_text = types.MethodType(safe_generate, ai)
+    ai._strict_social_guard = True
 
 
 def _patch_context(handlers) -> None:
-    if getattr(handlers, "_strict_context_guard", False): return
+    if getattr(handlers, "_strict_context_guard", False):
+        return
     original = getattr(handlers, "_conversation_context", None)
-    if not callable(original): return
-    def build(instance, message, current_text): return original(message, current_text), "DIRECT_REPLY"
-    handlers._build_ai_context = types.MethodType(build, handlers); handlers._strict_context_guard = True
+    if not callable(original):
+        return
+
+    def build(instance, message, current_text):
+        return original(message, current_text), "DIRECT_REPLY"
+
+    handlers._build_ai_context = types.MethodType(build, handlers)
+    handlers._strict_context_guard = True
 
 
 def install(handlers) -> None:
-    if getattr(handlers, "_media_requests_installed", False): return
+    if getattr(handlers, "_media_requests_installed", False):
+        return
     original = handlers.on_message
-    if not callable(original): return
-    _patch_ai(handlers); _patch_context(handlers)
+    if not callable(original):
+        return
+    _patch_ai(handlers)
+    _patch_context(handlers)
 
     def wrapped(instance, message):
         try:
-            if not is_group(getattr(message.chat, "type", "")): return original(message)
+            if not is_group(getattr(message.chat, "type", "")):
+                return original(message)
             text = getattr(message, "text", None) or getattr(message, "caption", None) or ""
+
+            # Highest-priority replay path: when the user replies to something,
+            # prefer the exact Telegram message over an unrelated item from the pool.
+            if _is_replay_request(text) and getattr(message, "reply_to_message", None):
+                try:
+                    state = instance.rt.db.get_json("chat_state", "chat_id", int(message.chat.id), {})
+                    if state.get("media_requests_enabled", True) is not False and _replay_reply(instance, message):
+                        return
+                except Exception:
+                    pass
+
             kind = _requested_type(text)
             if kind:
                 try:
                     state = instance.rt.db.get_json("chat_state", "chat_id", int(message.chat.id), {})
-                    if state.get("media_requests_enabled", True) is False: return
-                except Exception: pass
-                if _send(instance, message, kind) or _send_replied(instance, message, kind): return
+                    if state.get("media_requests_enabled", True) is False:
+                        return
+                except Exception:
+                    pass
+                # If this is a reply, exact media wins; otherwise use the group's pool.
+                if _send_replied(instance, message, kind) or _send(instance, message, kind):
+                    return
                 log.info("media requested but unavailable: chat=%s type=%s", message.chat.id, kind)
                 return
+
             return original(message)
         except Exception:
-            log.exception("explicit media request failed"); return original(message)
+            log.exception("explicit media/replay request failed")
+            return original(message)
 
-    handlers.on_message = types.MethodType(wrapped, handlers); handlers._media_requests_installed = True
+    handlers.on_message = types.MethodType(wrapped, handlers)
+    handlers._media_requests_installed = True
