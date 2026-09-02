@@ -11,6 +11,7 @@ from app.telegram.moderation import register as register_moderation
 from app.telegram.memory_admin import is_owner, menu as god_menu
 from app.telegram.social_mix import install as install_social_mix
 from app.telegram.media_requests import install as install_media_requests
+from app.telegram.media_settings import register as register_media_settings
 from app.memory.handlers import MemoryHandlers
 from app.worker.scheduler import ProactiveScheduler
 from app.worker.media_automation import MediaAutomation
@@ -49,11 +50,10 @@ class KyoosBot:
         register_chaos_admin(self.bot,self.runtime)
         register_owner_controls(self.bot,self.runtime)
         register_moderation(self.bot,self.runtime)
+        register_media_settings(self.bot,self.runtime)
         self.handlers=TelegramHandlers(self.bot,self.runtime)
         self.memory_handlers=MemoryHandlers(self.bot,self.runtime,self.handlers)
         install_social_mix(self.handlers)
-        # Explicit requests such as "ارسل صورة / GIF / فويس" bypass AI and
-        # immediately send a random matching item from this group's media pool.
         install_media_requests(self.handlers)
 
         @self.bot.message_handler(content_types=['animation','audio','voice'])
@@ -66,18 +66,9 @@ class KyoosBot:
                 file_id=getattr(obj,'file_id',None)
                 if not file_id:
                     return
-                self.runtime.images.add(ImageRef(
-                    chat_id=message.chat.id,
-                    message_id=message.message_id,
-                    telegram_file_id=file_id,
-                    created_at=message.date or time.time(),
-                    used_at=None,
-                    uploader_id=getattr(getattr(message,'from_user',None),'id',0),
-                    media_type=kind,
-                ))
+                self.runtime.images.add(ImageRef(chat_id=message.chat.id,message_id=message.message_id,telegram_file_id=file_id,created_at=message.date or time.time(),used_at=None,uploader_id=getattr(getattr(message,'from_user',None),'id',0),media_type=kind))
                 log.debug('media pool learned %s in chat=%s',kind,message.chat.id)
-            except Exception:
-                log.debug('extra media collection failed',exc_info=True)
+            except Exception: log.debug('extra media collection failed',exc_info=True)
 
         register_smart_archive(self.runtime)
         self.media_automation=MediaAutomation(self.bot,self.runtime); self.media_automation.start()
@@ -86,25 +77,20 @@ class KyoosBot:
         install_commands(self.bot); self._configure_webhook(); self._start_proactive()
 
     def _sync_membership(self, update):
-        """Persist groups where Telegram says the bot is still a member, including restricted bots."""
         try:
             cm=getattr(update,'my_chat_member',None)
             if not cm:return
-            chat=getattr(cm,'chat',None); new=getattr(cm,'new_chat_member',None)
-            cid=getattr(chat,'id',None)
+            chat=getattr(cm,'chat',None); new=getattr(cm,'new_chat_member',None); cid=getattr(chat,'id',None)
             if cid is None:return
-            status=str(getattr(new,'status','')).lower()
-            present=status in {'member','administrator','creator'} or (status=='restricted' and bool(getattr(new,'is_member',False)))
+            status=str(getattr(new,'status','')).lower(); present=status in {'member','administrator','creator'} or (status=='restricted' and bool(getattr(new,'is_member',False)))
             s=self.runtime.db.get_json('chat_settings','chat_id',0,{})
             chats=[]
             for x in s.get('known_chats',[]):
                 try:
                     if int(x.get('chat_id'))!=int(cid): chats.append(x)
                 except Exception: pass
-            if present:
-                chats.append({'chat_id':int(cid),'title':getattr(chat,'title',None),'username':getattr(chat,'username',None),'bot_member':True,'restricted':status=='restricted'})
-            s['known_chats']=chats[-200:]
-            memberships=dict(s.get('bot_memberships',{})); memberships[str(cid)]=present; s['bot_memberships']=memberships
+            if present: chats.append({'chat_id':int(cid),'title':getattr(chat,'title',None),'username':getattr(chat,'username',None),'bot_member':True,'restricted':status=='restricted'})
+            s['known_chats']=chats[-200:]; memberships=dict(s.get('bot_memberships',{})); memberships[str(cid)]=present; s['bot_memberships']=memberships
             self.runtime.db.save_chat_settings(0,s)
             log.info('telegram membership sync chat=%s status=%s is_member=%s present=%s',cid,status,getattr(new,'is_member',None),present)
         except Exception: log.exception('membership sync failed')
@@ -112,17 +98,14 @@ class KyoosBot:
     def _configure_webhook(self):
         base=settings.public_base_url
         if not base: log.warning('Telegram webhook NOT configured: PUBLIC_BASE_URL/RENDER_EXTERNAL_URL is missing'); return
-        url=f'{base.rstrip("/")}/telegram/webhook'
-        allowed_updates=['message','edited_message','channel_post','edited_channel_post','callback_query','my_chat_member','chat_member','pre_checkout_query']
+        url=f'{base.rstrip("/")}/telegram/webhook'; allowed_updates=['message','edited_message','channel_post','edited_channel_post','callback_query','my_chat_member','chat_member','pre_checkout_query']
         try:
             for attempt in range(3):
-                try:
-                    self.bot.set_webhook(url=url,secret_token=settings.webhook_secret or None,allowed_updates=allowed_updates,drop_pending_updates=False); break
+                try:self.bot.set_webhook(url=url,secret_token=settings.webhook_secret or None,allowed_updates=allowed_updates,drop_pending_updates=False); break
                 except Exception as exc:
                     if '429' not in str(exc) or attempt==2: raise
                     time.sleep(1.5*(attempt+1))
-            info=self.bot.get_webhook_info()
-            log.info('telegram webhook configured: url=%s pending=%s allowed=%s last_error=%s',url,getattr(info,'pending_update_count',0),allowed_updates,getattr(info,'last_error_message','') or 'none')
+            info=self.bot.get_webhook_info(); log.info('telegram webhook configured: url=%s pending=%s allowed=%s last_error=%s',url,getattr(info,'pending_update_count',0),allowed_updates,getattr(info,'last_error_message','') or 'none')
         except Exception: log.exception('webhook setup failed; existing webhook will be left untouched')
 
     def _start_proactive(self):
@@ -132,17 +115,14 @@ class KyoosBot:
     def _selected_chat(self):
         try:
             state=self.runtime.db.get_json('chat_settings','chat_id',0,{})
-            cid=int(state.get('selected_chat_id',0) or 0)
-            return cid if cid < 0 else None
+            cid=int(state.get('selected_chat_id',0) or 0); return cid if cid < 0 else None
         except Exception: return None
 
     def _proactive_tick(self):
         chat_id=self._selected_chat()
         if chat_id is not None:
             proactive=getattr(self.handlers,'proactive',None)
-            if callable(proactive):
-                proactive(chat_id)
-            else:
-                log.debug('proactive skipped: handler has no proactive method')
+            if callable(proactive): proactive(chat_id)
+            else: log.debug('proactive skipped: handler has no proactive method')
 
     def process(self,update): self.bot.process_new_updates([update])
