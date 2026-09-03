@@ -23,6 +23,7 @@ REQUEST_WORDS = (
     "ارسل", "أرسل", "ارسلي", "أرسلي", "ترسل", "ترسلي", "ترسلها", "ترسليها", "ارسله", "ارسلها", "ارسللي", "ارسليلي",
     "رسل", "رسلي", "رسلها", "رسليها", "بعت", "بعتلي", "بعتليها", "بعث", "ابعث", "ابعثي", "ابعت", "ابعتلي", "ابعتليها",
     "هات", "هاتلي", "هاتي", "جيب", "جيبي", "وريني", "عطني", "اعطني", "أعطني", "send", "show", "give", "get", "share", "drop",
+    "اعطيني", "أعطيني", "بغيت", "بغيتك", "بدي", "ابي", "ابغى", "ممكن", "عندك", "عندك شي", "عندك صورة", "عندك فيديو",
 )
 
 REPLAY_WORDS = (
@@ -44,14 +45,29 @@ def _has_word(s: str, word: str) -> bool:
     return bool(w and re.search(r"(?<!\w)" + re.escape(w) + r"(?:ها|ه|لي|ليها|ليلي|هم)?(?!\w)", s))
 
 
-def _requested_type(text: str) -> str | None:
-    s = _normalize(text)
-    if not s or not any(_has_word(s, w) for w in REQUEST_WORDS):
-        return None
+def _has_media_word(s: str) -> str | None:
     for kind, words in REQUESTS.items():
         if any(_has_word(s, w) for w in words):
             return kind
     return None
+
+
+def _requested_type(text: str) -> str | None:
+    s = _normalize(text)
+    if not s:
+        return None
+    media = _has_media_word(s)
+    if not media:
+        return None
+    # A media word by itself is intentionally not enough unless the message is
+    # clearly asking for it. This avoids hijacking normal conversation such as
+    # "الصورة حلوة".
+    has_request = any(_has_word(s, w) for w in REQUEST_WORDS)
+    if has_request:
+        return media
+    # Natural short requests commonly omit the verb: "صورة لو سمحتي؟", "فيديو؟".
+    short_request = len(s.split()) <= 4 and any(x in s for x in ("؟", "?", "لو سمح", "لو سمحتي", "ممكن", "please"))
+    return media if short_request else None
 
 
 def _is_replay_request(text: str) -> bool:
@@ -92,9 +108,21 @@ def _send_file(handler, message, media_type: str, file_id: str) -> bool:
         return False
 
 
+def _copy_replied(handler, message) -> bool:
+    reply = getattr(message, "reply_to_message", None)
+    rid = getattr(reply, "message_id", None) if reply else None
+    if rid is None:
+        return False
+    try:
+        handler.bot.copy_message(message.chat.id, message.chat.id, rid)
+        return True
+    except Exception:
+        return False
+
+
 def _memory_media(handler, message, media_type: str | None = None):
     try:
-        recent = handler.rt.memory.recent(message.chat.id, 80)
+        recent = handler.rt.memory.recent(message.chat.id, 120)
     except Exception:
         return None
     for item in reversed(recent):
@@ -108,7 +136,7 @@ def _memory_media(handler, message, media_type: str | None = None):
 
 def _send_from_memory(handler, message, media_type: str | None = None, message_id: int | None = None) -> bool:
     try:
-        recent = handler.rt.memory.recent(message.chat.id, 120)
+        recent = handler.rt.memory.recent(message.chat.id, 160)
     except Exception:
         return False
     for item in reversed(recent):
@@ -129,7 +157,7 @@ def _send(handler, message, media_type: str) -> bool:
     if ref and _send_file(handler, message, media_type, ref.image_file_id):
         return True
     tried: set[str] = set()
-    for _ in range(4):
+    for _ in range(6):
         ref = handler.rt.images.choose(message.chat.id, media_type=media_type, avoid_file_ids=tried)
         if not ref:
             break
@@ -148,6 +176,9 @@ def _reply_media_kind(reply) -> str | None:
 
 
 def _send_replied(handler, message, media_type: str | None = None) -> bool:
+    # Exact Telegram copy first: this works even when the local media pool is empty.
+    if _copy_replied(handler, message):
+        return True
     reply = getattr(message, "reply_to_message", None)
     if not reply:
         return False
@@ -209,12 +240,12 @@ def _strip_emoji_spam(text: str) -> str:
     return "".join(out).strip()
 
 
-def _reply_is_duplicate(handler, chat_id: int, reply: str) -> bool:
+def _reply_is_duplicate(memory, chat_id: int, reply: str) -> bool:
     norm = re.sub(r"\s+", " ", _normalize(reply)).strip()
-    if len(norm) < 8:
+    if len(norm) < 8 or memory is None:
         return False
     try:
-        recent = handler.rt.memory.recent(chat_id, 12)
+        recent = memory.recent(chat_id, 12)
     except Exception:
         return False
     for item in reversed(recent):
@@ -233,23 +264,30 @@ def _patch_ai(handlers) -> None:
     original = getattr(ai, "generate_text", None)
     if not callable(original):
         return
+    ai._social_memory = getattr(handlers.rt, "memory", None)
 
     def safe_generate(instance, prompt, system=None):
         target = _target_from_prompt(prompt)
+        arabic = bool(re.search(r"[\u0600-\u06ff]", target))
         try:
             result = str(original(prompt, system) or "").strip()
             if not result or result.lower() in {"none", "null", "nil", "n/a"} or _wrong_script(target, result):
-                return "مفهمتش، عاودها ليا" if re.search(r"[\u0600-\u06ff]", target) else "I didn't catch that"
+                # Never emit a fixed fallback phrase. An empty result lets the
+                # message pipeline simply skip the reply instead of spamming it.
+                return ""
             result = _strip_emoji_spam(result)
             chat_id = int(getattr(instance, "_current_chat_id", 0) or 0)
-            if chat_id and _reply_is_duplicate(instance, chat_id, result):
+            memory = getattr(instance, "_social_memory", None)
+            if chat_id and _reply_is_duplicate(memory, chat_id, result):
                 retry_system = (system or "") + "\nCRITICAL: Your previous candidate repeated a recent bot reply. Write a genuinely different short reply; do not reuse its wording, opening, or punchline."
                 fresh = _strip_emoji_spam(str(original(prompt, retry_system) or "").strip())
-                if fresh and not _wrong_script(target, fresh) and not _reply_is_duplicate(instance, chat_id, fresh):
+                if fresh and not _wrong_script(target, fresh) and not _reply_is_duplicate(memory, chat_id, fresh):
                     result = fresh
+                elif not fresh or _reply_is_duplicate(memory, chat_id, fresh):
+                    return ""
             return result
         except Exception:
-            return "مفهمتش، عاودها ليا" if re.search(r"[\u0600-\u06ff]", target) else "I didn't catch that"
+            return ""
 
     ai.generate_text = types.MethodType(safe_generate, ai)
     ai._strict_social_guard = True
@@ -290,7 +328,8 @@ def install(handlers) -> None:
                 return original(message)
 
             kind = _requested_type(text)
-            if getattr(message, "reply_to_message", None) and (kind or _is_replay_request(text)):
+            reply = getattr(message, "reply_to_message", None)
+            if reply and (kind or _is_replay_request(text)):
                 if _send_replied(instance, message, kind):
                     return
                 if _is_replay_request(text) and _replay_reply(instance, message):
@@ -299,6 +338,8 @@ def install(handlers) -> None:
             if kind:
                 if _send(instance, message, kind):
                     return
+                # Explicit media requests should never fall through to the AI,
+                # which previously produced the confusing fixed fallback.
                 log.info("media requested but unavailable: chat=%s type=%s", message.chat.id, kind)
                 return
 
