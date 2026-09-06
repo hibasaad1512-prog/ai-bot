@@ -12,6 +12,7 @@ from app.telegram.memory_admin import is_owner, menu as god_menu
 from app.telegram.social_mix import install as install_social_mix
 from app.telegram.media_requests import install as install_media_requests
 from app.telegram.media_settings import register as register_media_settings
+from app.telegram.random_gate import install as install_random_gate
 from app.memory.handlers import MemoryHandlers
 from app.worker.scheduler import ProactiveScheduler
 from app.worker.media_automation import MediaAutomation
@@ -52,6 +53,7 @@ class KyoosBot:
         register_moderation(self.bot,self.runtime)
         register_media_settings(self.bot,self.runtime)
         self.handlers=TelegramHandlers(self.bot,self.runtime)
+        install_random_gate(self.handlers)
         self.memory_handlers=MemoryHandlers(self.bot,self.runtime,self.handlers)
         install_social_mix(self.handlers)
         install_media_requests(self.handlers)
@@ -67,7 +69,7 @@ class KyoosBot:
                 if not file_id:
                     return
                 self.runtime.images.add(ImageRef(chat_id=message.chat.id,message_id=message.message_id,telegram_file_id=file_id,created_at=message.date or time.time(),used_at=None,uploader_id=getattr(getattr(message,'from_user',None),'id',0),media_type=kind))
-                log.debug('media pool learned %s in chat=%s',kind,message.chat.id)
+                log.debug('media pool learned %s in chat=%s',kind, message.chat.id)
             except Exception: log.debug('extra media collection failed',exc_info=True)
 
         register_smart_archive(self.runtime)
