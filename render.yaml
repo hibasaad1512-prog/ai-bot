@@ -54,8 +54,6 @@ services:
         value: "30"
       - key: PROACTIVE_MAX_MESSAGES
         value: "90"
-      - key: PROACTIVE_IDLE_SECONDS
-        value: "900"
       - key: PROACTIVE_QUIET_START
         value: "0"
       - key: PROACTIVE_QUIET_END
@@ -69,7 +67,7 @@ services:
       - key: CALLBACK_MIN_AGE_SECONDS
         value: "300"
       - key: PROACTIVE_QUIET_SECONDS
-        value: "900"
+        value: "0"
       - key: KEEPALIVE_ENABLED
         value: "true"
       - key: KEEPALIVE_INTERVAL_SECONDS
