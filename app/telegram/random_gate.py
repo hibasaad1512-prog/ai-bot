@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import random
+import hashlib
 import threading
 import types
 
@@ -14,8 +14,44 @@ class _GateState(threading.local):
     claimed = False
 
 
+def _stable_random(chat_id: int, message_id: int, user_id: int, text: str) -> float:
+    """Process-independent random value derived from Telegram message identity."""
+    key = settings.telegram_bot_token.encode("utf-8")[:64]
+    payload = f"{chat_id}:{message_id}:{user_id}:{text[:512]}".encode("utf-8", "ignore")
+    digest = hashlib.blake2b(payload, key=key, digest_size=8).digest()
+    return int.from_bytes(digest, "big") / 2**64
+
+
+def _smart_chance(message, text: str) -> float:
+    """Adjust probability from message semantics without server-side state."""
+    chance = float(settings.reply_chance)
+    lower = text.lower()
+    username = str(getattr(message, "_bot_username", "") or "").lstrip("@").lower()
+    if username and username in lower:
+        chance += 0.16
+
+    reply = getattr(message, "reply_to_message", None)
+    if reply and getattr(getattr(reply, "from_user", None), "is_bot", False):
+        chance += 0.16
+
+    if "?" in text or "؟" in text:
+        chance += 0.08
+
+    if len(text) <= 2:
+        chance -= 0.20
+    elif len(text) <= 5:
+        chance -= 0.08
+    elif len(text) >= 180:
+        chance += 0.03
+
+    if any(word in lower for word in ("why", "how", "what", "who", "علاش", "كيف", "شنو", "واش", "فين")):
+        chance += 0.05
+
+    return max(0.0, min(0.97, chance))
+
+
 def install(handlers) -> None:
-    """Install one concurrency-safe gate in front of normal AI generation."""
+    """Install a stateless, context-aware gate in front of normal AI replies."""
     if getattr(handlers, "_random_gate_installed", False):
         return
 
@@ -58,31 +94,17 @@ def install(handlers) -> None:
         ):
             return original_message(message)
 
-        # A human message breaks the consecutive-bot streak immediately.
         cooldowns.record_human_message(state.chat_id)
-
         text = str(message.text or "").strip()
-        username = str(getattr(instance, "_bot_username", "") or "").lstrip("@").lower()
-        mentioned = bool(username and username in text.lower())
-        replied_to_bot = bool(
-            getattr(message, "reply_to_message", None)
-            and getattr(getattr(message.reply_to_message, "from_user", None), "is_bot", False)
-        )
-        question = "?" in text or text.endswith(("؟", "?"))
+        user_id = int(getattr(getattr(message, "from_user", None), "id", 0) or 0)
+        message_id = int(getattr(message, "message_id", 0) or 0)
+        chance = _smart_chance(message, text)
 
-        chance = float(settings.reply_chance)
-        if mentioned or replied_to_bot:
-            chance = min(0.97, chance + 0.15)
-        elif question:
-            chance = min(0.92, chance + 0.07)
-
-        # One random decision per message; no hidden second roll.
-        if random.random() >= chance:
+        # No Python RNG state: restart/redeploy does not change this message's roll.
+        if _stable_random(state.chat_id, message_id, user_id, text) >= chance:
             state.allow_ai = False
             return original_message(message)
 
-        # Reserve the global slot before the expensive AI request. The normal
-        # handler commits hourly/consecutive counters only after it sends.
         if not cooldowns.try_gate(
             state.chat_id,
             global_cooldown=cooldowns.random_gap(
@@ -99,8 +121,6 @@ def install(handlers) -> None:
         try:
             return original_message(message)
         finally:
-            # If the normal handler did not actually produce an AI reply,
-            # don't leave a pre-AI reservation behind.
             if state.claimed:
                 cooldowns.release_global(state.chat_id)
                 state.claimed = False
