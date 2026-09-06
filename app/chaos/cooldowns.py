@@ -7,13 +7,7 @@ from collections import defaultdict, deque
 
 
 class CooldownStore:
-    """Process-local anti-spam gate shared by every chaos action.
-
-    All checks and claims are protected by one lock so concurrent Telegram
-    webhook threads cannot both pass the same gate. Persistent chat state is
-    handled separately by Runtime/Database; this store deliberately keeps
-    short-lived timing data in memory.
-    """
+    """Thread-safe anti-spam state shared by all bot actions."""
 
     def __init__(self):
         self.until: dict[str, float] = {}
@@ -35,8 +29,22 @@ class CooldownStore:
         with self._lock:
             self.until[key] = time.time() + max(0.0, float(seconds))
 
+    def try_gate(self, chat_id: int, *, global_cooldown: float, hourly_limit: int, max_consecutive: int) -> bool:
+        """Reserve a reply slot without counting a reply yet."""
+        with self._lock:
+            now = time.time()
+            self._trim(chat_id)
+            if len(self.hour[chat_id]) >= max(1, hourly_limit):
+                return False
+            if self.consecutive[chat_id] >= max(1, max_consecutive):
+                return False
+            if now < self.until.get(f"chat:{chat_id}", 0.0):
+                return False
+            self.until[f"chat:{chat_id}"] = now + max(0.0, float(global_cooldown))
+            return True
+
     def record_action(self, chat_id: int, action: str | None = None) -> None:
-        """Record a successful action and reset consecutive-human protection."""
+        """Commit a successfully sent action to the budgets."""
         with self._lock:
             self.hour[chat_id].append(time.time())
             self._trim(chat_id)
@@ -57,22 +65,8 @@ class CooldownStore:
             self._trim(chat_id)
             return len(self.hour[chat_id])
 
-    def claim(
-        self,
-        chat_id: int,
-        action: str,
-        *,
-        action_cooldown: float,
-        global_cooldown: float,
-        hourly_limit: int,
-        max_consecutive: int,
-    ) -> bool:
-        """Atomically check and reserve every anti-spam gate.
-
-        IMPORTANT: callers must invoke this immediately before executing an
-        action. There is intentionally no alternate execute path that can
-        bypass these checks.
-        """
+    def claim(self, chat_id: int, action: str, *, action_cooldown: float, global_cooldown: float, hourly_limit: int, max_consecutive: int) -> bool:
+        """Atomically reserve a full action, including its counters."""
         with self._lock:
             now = time.time()
             self._trim(chat_id)
@@ -91,7 +85,7 @@ class CooldownStore:
             return True
 
     def release_global(self, chat_id: int) -> None:
-        """Release a reservation when an action failed before sending."""
+        """Release only a pre-AI reservation."""
         with self._lock:
             self.until.pop(f"chat:{chat_id}", None)
 

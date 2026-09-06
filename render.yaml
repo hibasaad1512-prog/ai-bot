@@ -56,3 +56,7 @@ services:
         value: "300"
       - key: PROACTIVE_QUIET_SECONDS
         value: "600"
+      - key: KEEPALIVE_ENABLED
+        value: "true"
+      - key: KEEPALIVE_INTERVAL_SECONDS
+        value: "480"
