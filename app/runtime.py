@@ -27,6 +27,7 @@ class Runtime:
         self.memory = ContextStore(settings.memory_size, settings.memory_ttl_seconds, db=self.db)
         self.images = ImagePool(settings.image_pool_ttl_seconds, db=self.db)
         self.ai = MultiProvider(self.db)
+        self._secure_ai_status()
         self.learning = SelfLearningMemory()
         self.chaos = ChaosEngine()
         self.games = GameEngine(Points(self.db))
@@ -37,6 +38,29 @@ class Runtime:
         self.next_proactive = {}
         self.proactive_min_seconds = max(60, int(settings.proactive_min_interval))
         self.proactive_max_seconds = max(self.proactive_min_seconds, int(settings.proactive_max_interval))
+
+    def _secure_ai_status(self) -> None:
+        """Prevent raw provider secrets from reaching Telegram/admin UI."""
+        getter = getattr(self.ai, "get_key_status", None)
+        if not callable(getter):
+            return
+        original = getter
+
+        def safe_status():
+            rows = original()
+            if not isinstance(rows, list):
+                return rows
+            safe_rows = []
+            for row in rows:
+                item = dict(row) if isinstance(row, dict) else {}
+                raw = str(item.get("key", ""))
+                masked = str(item.get("masked", ""))
+                item["key"] = masked or (raw[:4] + "…" + raw[-4:] if len(raw) > 10 else "[hidden]")
+                item.pop("secret", None)
+                safe_rows.append(item)
+            return safe_rows
+
+        self.ai.get_key_status = safe_status
 
     @staticmethod
     def _merge_dict(base, override):
