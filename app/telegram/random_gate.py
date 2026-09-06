@@ -15,17 +15,13 @@ class _GateState(threading.local):
 
 
 def install(handlers) -> None:
-    """Install one concurrency-safe gate in front of normal AI generation.
-
-    The existing message handler still records memory, moderation and media,
-    but the AI call is suppressed when the probabilistic gate says no.
-    """
+    """Install one concurrency-safe gate in front of normal AI generation."""
     if getattr(handlers, "_random_gate_installed", False):
         return
 
     ai = getattr(getattr(handlers, "rt", None), "ai", None)
-    cooldowns = getattr(getattr(handlers, "rt", None), "chaos", None)
-    cooldowns = getattr(cooldowns, "cooldowns", None)
+    chaos = getattr(getattr(handlers, "rt", None), "chaos", None)
+    cooldowns = getattr(chaos, "cooldowns", None)
     original_message = getattr(handlers, "on_message", None)
     original_generate = getattr(ai, "generate_text", None)
     if not callable(original_message) or not callable(original_generate) or cooldowns is None:
@@ -62,6 +58,9 @@ def install(handlers) -> None:
         ):
             return original_message(message)
 
+        # A human message breaks the consecutive-bot streak immediately.
+        cooldowns.record_human_message(state.chat_id)
+
         text = str(message.text or "").strip()
         username = str(getattr(instance, "_bot_username", "") or "").lstrip("@").lower()
         mentioned = bool(username and username in text.lower())
@@ -71,22 +70,19 @@ def install(handlers) -> None:
         )
         question = "?" in text or text.endswith(("؟", "?"))
 
-        # Explicitly addressed messages are highly likely, not guaranteed.
         chance = float(settings.reply_chance)
         if mentioned or replied_to_bot:
             chance = min(0.97, chance + 0.15)
         elif question:
             chance = min(0.92, chance + 0.07)
 
-        # A single random decision is made for this message. This fixes the
-        # old hard-coded 100% path while keeping direct conversation responsive.
+        # One random decision per message; no hidden second roll.
         if random.random() >= chance:
             state.allow_ai = False
             return original_message(message)
 
-        # Reserve the global anti-spam slot before the expensive AI request.
-        # record_action() later commits the successful response to hourly and
-        # consecutive counters. If AI fails, the reservation is released.
+        # Reserve the global slot before the expensive AI request. The normal
+        # handler commits hourly/consecutive counters only after it sends.
         if not cooldowns.try_gate(
             state.chat_id,
             global_cooldown=cooldowns.random_gap(
@@ -101,11 +97,10 @@ def install(handlers) -> None:
 
         state.claimed = True
         try:
-            result = original_message(message)
-            return result
+            return original_message(message)
         finally:
-            # A successful original handler records the action itself. If it
-            # never called generate_text, don't leave the reservation hanging.
+            # If the normal handler did not actually produce an AI reply,
+            # don't leave a pre-AI reservation behind.
             if state.claimed:
                 cooldowns.release_global(state.chat_id)
                 state.claimed = False
