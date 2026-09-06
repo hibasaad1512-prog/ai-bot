@@ -22,11 +22,11 @@ def _stable_random(chat_id: int, message_id: int, user_id: int, text: str) -> fl
     return int.from_bytes(digest, "big") / 2**64
 
 
-def _smart_chance(message, text: str) -> float:
+def _smart_chance(instance, message, text: str) -> float:
     """Adjust probability from message semantics without server-side state."""
     chance = float(settings.reply_chance)
     lower = text.lower()
-    username = str(getattr(message, "_bot_username", "") or "").lstrip("@").lower()
+    username = str(getattr(instance, "_bot_username", "") or "").lstrip("@").lower()
     if username and username in lower:
         chance += 0.16
 
@@ -98,7 +98,7 @@ def install(handlers) -> None:
         text = str(message.text or "").strip()
         user_id = int(getattr(getattr(message, "from_user", None), "id", 0) or 0)
         message_id = int(getattr(message, "message_id", 0) or 0)
-        chance = _smart_chance(message, text)
+        chance = _smart_chance(instance, message, text)
 
         # No Python RNG state: restart/redeploy does not change this message's roll.
         if _stable_random(state.chat_id, message_id, user_id, text) >= chance:
