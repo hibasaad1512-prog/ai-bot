@@ -20,16 +20,20 @@ def install(handlers) -> None:
         if not runtime.proactive_due(chat_id):
             return
 
-        # Chance is evaluated only when the persistent timer is due.
         if random.random() >= float(settings.proactive_chance):
             runtime.mark_proactive_done(chat_id)
             return
 
         try:
+            # The legacy handler has its own in-memory timer. The persistent
+            # runtime is now authoritative, so force that secondary timer due.
+            next_map = getattr(instance, "_next_proactive", None)
+            if isinstance(next_map, dict):
+                next_map[chat_id] = 0
             original(chat_id)
         finally:
-            # Persist the next window even if the AI/provider failed. This
-            # prevents a tight retry loop after an outage.
+            # Always move the persistent window forward, including provider
+            # failures, so an outage cannot create a retry storm.
             runtime.mark_proactive_done(chat_id)
 
     handlers.proactive = types.MethodType(wrapped, handlers)
