@@ -50,6 +50,20 @@ services:
         value: "7200"
       - key: PROACTIVE_MAX_INTERVAL
         value: "18000"
+      - key: PROACTIVE_MIN_MESSAGES
+        value: "12"
+      - key: PROACTIVE_MAX_MESSAGES
+        value: "28"
+      - key: PROACTIVE_IDLE_SECONDS
+        value: "600"
+      - key: PROACTIVE_QUIET_START
+        value: "0"
+      - key: PROACTIVE_QUIET_END
+        value: "6"
+      - key: PROACTIVE_REST_MINUTES
+        value: "12"
+      - key: PROACTIVE_REST_EVERY_HOURS
+        value: "6"
       - key: AI_MIN_SCORE
         value: "34"
       - key: CALLBACK_MIN_AGE_SECONDS
