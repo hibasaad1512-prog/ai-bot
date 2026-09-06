@@ -78,7 +78,6 @@ class Runtime:
  def proactive_due(self,chat_id):
   self._load_smart_state(chat_id)
   if self._resting_now():return False
-  if self._last_human.get(chat_id,0) and time.time()-self._last_human[chat_id]<settings.proactive_idle_seconds:return False
   if chat_id not in self.next_proactive:self.schedule_proactive(chat_id); return False
   return self._proactive_messages.get(chat_id,0)>=max(1,self._proactive_target_messages.get(chat_id,settings.proactive_min_messages)) or time.time()>=self.next_proactive[chat_id]
  def mark_proactive_done(self,chat_id):
