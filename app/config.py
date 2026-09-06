@@ -44,6 +44,9 @@ def env_keys() -> tuple[str, ...]:
         value = value.strip()
         if value:
             values.append((index, value))
+            # GroqProvider already supports numbered environment variables.
+            # Bridge the comma-separated convenience format to that interface.
+            os.environ.setdefault(f"GROQ_API_KEY_{index}", value)
     for name, value in os.environ.items():
         if not name.startswith("GROQ_API_KEY_"):
             continue
