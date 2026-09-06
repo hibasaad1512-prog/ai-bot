@@ -9,8 +9,19 @@ def env_bool(name: str, default: bool) -> bool:
 
 
 def env_int(name: str, default: int, minimum: int = 0) -> int:
-    try: return max(minimum, int(os.getenv(name, str(default))))
-    except ValueError: return default
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def env_float(name: str, default: float, minimum: float = 0.0, maximum: float | None = None) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    value = max(minimum, value)
+    return min(maximum, value) if maximum is not None else value
 
 
 def env_ids(name: str) -> frozenset[int]:
@@ -18,9 +29,31 @@ def env_ids(name: str) -> frozenset[int]:
     for raw in os.getenv(name, "").split(","):
         raw = raw.strip()
         if raw:
-            try: out.add(int(raw))
-            except ValueError: pass
+            try:
+                out.add(int(raw))
+            except ValueError:
+                pass
     return frozenset(out)
+
+
+def env_keys() -> tuple[str, ...]:
+    """Read comma-separated and numbered Groq keys without logging them."""
+    values: list[tuple[int, str]] = []
+    raw = os.getenv("GROQ_API_KEYS", "")
+    for index, value in enumerate(raw.split(","), start=1):
+        value = value.strip()
+        if value:
+            values.append((index, value))
+            # GroqProvider already supports numbered environment variables.
+            # Bridge the comma-separated convenience format to that interface.
+            os.environ.setdefault(f"GROQ_API_KEY_{index}", value)
+    for name, value in os.environ.items():
+        if not name.startswith("GROQ_API_KEY_"):
+            continue
+        suffix = name.removeprefix("GROQ_API_KEY_")
+        if suffix.isdigit() and value.strip():
+            values.append((int(suffix), value.strip()))
+    return tuple(value for _, value in sorted(values, key=lambda item: item[0]))
 
 
 @dataclass(frozen=True)
@@ -41,7 +74,8 @@ class PersonalityDefaults:
 class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     groq_api_key: str = os.getenv("GROQ_API_KEY", "").strip()
-    groq_text_model: str = os.getenv("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile").strip()
+    groq_api_keys: tuple[str, ...] = field(default_factory=env_keys)
+    groq_text_model: str = os.getenv("GROQ_TEXT_MODEL", "openai/gpt-oss-120b").strip()
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "").strip()
@@ -54,7 +88,7 @@ class Settings:
     text_model: str = os.getenv("GEMINI_TEXT_MODEL", "gemini-2.5-flash").strip()
     image_model: str = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image").strip()
     ai_provider_order: str = os.getenv("AI_PROVIDER_ORDER", "groq,openai,deepseek,openrouter,together,gemini").strip()
-    groq_admin_ids: frozenset[int] = field(default_factory=lambda: env_ids("GROQ_ADMIN_IDS") or frozenset({8734853156}))
+    groq_admin_ids: frozenset[int] = field(default_factory=lambda: env_ids("GROQ_ADMIN_IDS"))
     database_url: str = os.getenv("DATABASE_URL", "").strip()
     redis_url: str = os.getenv("REDIS_URL", "").strip()
     public_base_url: str = (os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/") or os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/"))
@@ -75,12 +109,24 @@ class Settings:
     enabled_proactive: bool = env_bool("ENABLED_PROACTIVE", True)
     proactive_min_interval: int = env_int("PROACTIVE_MIN_INTERVAL", 7200, 60)
     proactive_max_interval: int = env_int("PROACTIVE_MAX_INTERVAL", 18000, 60)
+    proactive_chance: float = env_float("PROACTIVE_CHANCE", 0.35, 0.0, 1.0)
+    reply_chance: float = env_float("REPLY_CHANCE", 0.80, 0.0, 1.0)
     ai_min_score: int = env_int("AI_MIN_SCORE", 34, 0)
     callback_min_age_seconds: int = env_int("CALLBACK_MIN_AGE_SECONDS", 300, 60)
     proactive_quiet_seconds: int = env_int("PROACTIVE_QUIET_SECONDS", 600, 60)
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
     companion_bot_tokens: tuple[str, ...] = field(default_factory=lambda: tuple(x.strip() for x in os.getenv("COMPANION_BOT_TOKENS", "").split(",") if x.strip()))
     defaults: PersonalityDefaults = field(default_factory=PersonalityDefaults)
+
+    def validate(self) -> None:
+        if not self.telegram_bot_token:
+            raise ValueError("TELEGRAM_BOT_TOKEN is required")
+        if self.max_cooldown_seconds < self.min_cooldown_seconds:
+            raise ValueError("MAX_COOLDOWN_SECONDS must be >= MIN_COOLDOWN_SECONDS")
+        if self.hard_hourly_limit < self.soft_hourly_limit:
+            raise ValueError("HARD_HOURLY_LIMIT must be >= SOFT_HOURLY_LIMIT")
+        if self.proactive_max_interval < self.proactive_min_interval:
+            raise ValueError("PROACTIVE_MAX_INTERVAL must be >= PROACTIVE_MIN_INTERVAL")
 
 
 settings = Settings()

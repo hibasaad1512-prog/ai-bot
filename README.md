@@ -1,68 +1,113 @@
-# Lmyrfawya AI
+# الميرفاوية — Almirfawya AI Telegram Bot
 
-lmyrfawya (kyoos) is a Telegram bot designed to feel like a casual, social, slightly chaotic member. `/start`, `/settings` and `/testai` are local commands; every other non-command text message is sent directly to Groq for a reply.
+المشروع هو بوت Telegram اجتماعي بالذكاء الاصطناعي باسم **الميرفاوية**. هدفه أن يتصرف كعضو طبيعي في المجموعة: يفهم السياق، يرد أحيانًا بدل الرد على كل رسالة، يغير طول ونبرة الرد، ويمكنه تنفيذ أحداث اجتماعية/فوضوية عندما تسمح الإعدادات والـ cooldowns.
 
-## Core behavior
-
-Kyoos replies to every normal text message by default. There is no local AI-eligibility gate on ordinary messages, so a valid user message is never silently discarded just because a score was low. The local command handlers always run first for `/start`, `/settings` and `/testai`.
-
-The action system is modular and includes `IGNORE`, contextual replies, conversation joins, reactions, old-message callbacks, quote remixes, random member interaction, random images, image captions, local image mashups/collages, context memes, image generation, polls, chaos events, mini challenges and companion-bot routing hooks.
+> الاسم الرسمي في المشروع: **الميرفاوية**. الاسم الداخلي المقترح: `almirfawya`.
 
 ## Architecture
 
 ```text
-Telegram webhook
-      |
-      v
- ContextStore -> Activity/Moderation -> Local Chaos Scoring
-      |                                  |
-      |                            likely ignore?
-      |                                  |
-      +---------------------------- no -> Groq Decision
-                                             |
-                                   schema/action validation
-                                             |
-                                  cooldown/rate-limit gate
-                                             |
-                                        Action Registry
-                                             |
-                               Telegram / Pillow / Games
+Telegram Webhook
+      │
+      ▼
+Message Router / Permissions
+      │
+      ├── Memory + PostgreSQL
+      ├── Moderation / privacy filters
+      ├── Social signals
+      ▼
+Decision / AI Router
+      │
+      ├── IGNORE
+      ├── normal/context reply
+      ├── reaction / question / callback
+      └── optional chaos/media/game action
+      │
+      ▼
+Unified cooldown + hourly + consecutive-message gate
+      │
+      ▼
+Telegram action execution
 ```
 
-AI is provider-agnostic through `AIProvider`; Groq is the active implementation.
+The bot uses `pyTelegramBotAPI` (TeleBot) and Flask/Gunicorn for the Render Web Service webhook. AI providers are behind a provider router, with Groq as the primary provider.
 
+## Compatibility
 
-### Per-group admin permissions
-`/settings` is never gated by a global admin list. In every group/supergroup, KYOOS checks Telegram live with `getChatMember` and only allows users whose status is `administrator` or `creator` to open or interact with the settings panel. Settings and language are stored by `chat_id`, so each group has its own configuration.
+- Python: **3.11+**
+- Telegram: `pyTelegramBotAPI >=4.29,<5`
+- Groq SDK: `groq >=1.7,<2`
+- PostgreSQL: recommended for production
+- SQLAlchemy 2 + psycopg 3 for database access
+- Flask + Gunicorn for Render HTTP service
 
-For Telegram to reliably report another member's admin status, KYOOS should have appropriate group administration/member visibility (normally the bot is added as an admin when moderation/admin verification is required). The bot never trusts a client-provided "admin" flag.
+The Groq SDK currently has a 1.7.0 release, while this repository uses a compatible `<2` range. `python-telegram-bot` is **not** used by this repository. citeturn0search0turn0search1
 
 ## Environment
 
-Copy `.env.example` to `.env` locally. Never commit `.env`.
+Copy `.env.example` to `.env` locally. Never commit `.env` or real API keys.
 
 Required:
 
 - `TELEGRAM_BOT_TOKEN`
-- `GROQ_API_KEY`
+- `GROQ_API_KEY` or `GROQ_API_KEYS` when Groq is the only configured AI provider
 
-Production persistence:
+Recommended in production:
 
-- `DATABASE_URL` — optional. Leave empty for local SQLite on the Render instance; use PostgreSQL later when persistent storage is needed.
-- `REDIS_URL` — optional. KYOOS does not require Redis to run.
-
-Render/webhook:
-
-- `PUBLIC_BASE_URL`
+- `DATABASE_URL` — persistent PostgreSQL connection string
 - `WEBHOOK_SECRET`
-- `PORT` is supplied by Render; local default is 10000.
+- `PUBLIC_BASE_URL` (Render can fall back to `RENDER_EXTERNAL_URL`)
 
-Optional model settings:
+Groq keys can be supplied as `GROQ_API_KEYS=key1,key2,key3` or numbered variables such as `GROQ_API_KEY_1`, `GROQ_API_KEY_2`. The application never logs full keys.
 
-- `GROQ_TEXT_MODEL` (default `openai/gpt-oss-120b`)
-- `COMPANION_BOT_TOKENS`
+## AI / Groq
 
-## Local setup
+Groq is used through a provider abstraction. The provider supports multiple keys and automatic rotation for API/rate-limit failures. Stored runtime key state is kept in the database so the active key can survive restarts when PostgreSQL is configured.
+
+The private Groq manager is restricted by `GROQ_ADMIN_IDS`. **Do not use a hard-coded user ID.** Keys shown in administrative UI should be masked, not printed in full.
+
+## Smart randomness
+
+Randomness is not a single `random() < chance` switch. The intended decision flow combines:
+
+- direct mention / reply-to-bot
+- group activity
+- questions and conversational continuity
+- serious/repeated context
+- personality values
+- recent bot activity
+- action-specific cooldowns
+- global cooldown
+- hourly limits
+- maximum consecutive bot messages
+- configurable reply probability
+
+Every action must pass the same final gate immediately before execution. This prevents a reaction, chaos event, proactive message, or media action from bypassing normal anti-spam protection.
+
+Important settings:
+
+- `REPLY_CHANCE` — baseline probability for ordinary interventions
+- `AI_MIN_SCORE` — minimum social score before an expensive AI decision call
+- `MIN_COOLDOWN_SECONDS` / `MAX_COOLDOWN_SECONDS`
+- `SOFT_HOURLY_LIMIT` / `HARD_HOURLY_LIMIT`
+- `MAX_CONSECUTIVE_BOT_MESSAGES`
+- `PROACTIVE_CHANCE`
+
+## Memory and PostgreSQL
+
+The bot keeps bounded recent context rather than sending the entire database to the model. Old message/media storage is pruned. PostgreSQL is the recommended production database because Render's local filesystem is not a durable database location.
+
+Persistent state includes chat settings, memory records, game points, provider state and proactive scheduling state where applicable.
+
+## Proactive behavior
+
+Proactive scheduling is randomized and activity-aware. The next/last proactive timestamps are persisted in `chat_state`, so a restart or Render redeploy does not automatically reset the schedule and cause an immediate burst.
+
+## Telegram permissions
+
+`/settings` is available to Telegram-confirmed group administrators. The bot should not trust a client-provided admin flag. Moderation actions also depend on Telegram permissions granted to the bot.
+
+## Local run
 
 ```bash
 python -m venv .venv
@@ -72,148 +117,51 @@ cp .env.example .env
 python -m app.main
 ```
 
-For local webhook testing, expose the HTTP service with a tunnel and set `PUBLIC_BASE_URL` to the public HTTPS URL.
+## Tests / checks
 
-## Render deployment
-
-This repository is prepared as a Render **Web Service** using Gunicorn and an HTTP health endpoint. Render supports Python web services with a build command such as `pip install -r requirements.txt`, a configurable start command, and HTTP health checks; `render.yaml` declares the health check at `/health`. citeturn992296search0turn992296search1turn992296search5
-
-Recommended production setup:
-
-1. Push the repository to GitHub.
-2. Create a Render Web Service from that repository.
-3. Use the included `render.yaml`.
-4. Add the environment variables from `.env.example`.
-5. Leave `DATABASE_URL` and `REDIS_URL` empty for the simple free setup.
-6. `PUBLIC_BASE_URL` can also be left empty on Render because the app auto-uses `RENDER_EXTERNAL_URL`.
-7. Add the Kyoos bot to the target groups with the required Telegram permissions.
-
-The application configures the Telegram webhook automatically when `PUBLIC_BASE_URL` is present. It also continues to boot if webhook registration temporarily fails.
-
-## Telegram configuration
-
-Kyoos needs to receive enough group messages to build context. Telegram Privacy Mode can limit which group messages a bot receives. For natural group observation, configure BotFather privacy settings and group permissions appropriately. The exact messages Telegram delivers depend on privacy mode and the bot's role/permissions.
-
-For moderation features, grant only the group permissions you actually enable. Deleting messages and restricting/kicking users require elevated group permissions.
-
-## `/start` and admin controls
-
-Regular members mainly use `/start`. Kyoos then observes and acts automatically.
-
-Admins can use `/settings` only inside groups/supergroups where Telegram confirms they are administrators. Every inline settings button and language change is re-checked against the current group admin status. `/testai` is available in private chats without a global admin ID, and is restricted to confirmed group admins inside groups.
-
-Personality values are stored per chat:
-
-- chaos
-- humor
-- social
-- weirdness
-- images
-- events
-- roast
-- emoji
-- human_imperfection
-- proactivity
-
-## AI behavior
-
-Groq structured decisions are treated as untrusted input. The application validates:
-
-- action enum
-- confidence range
-- target message ID
-- feature enablement
-- cooldown state
-- hourly/burst limits
-
-Groq cannot call Telegram APIs directly.
-
-Groq is used for text and structured decision generation. The current Groq provider build does not expose image generation or vision, so those capabilities stay disabled rather than failing silently. citeturn992296search2turn992296search3turn992296search4
-
-## Memory and privacy
-
-Chat context is bounded (default 40 messages) and TTL-based. Uploaded image references are also bounded and temporary in the in-memory pool. Kyoos does not intentionally build a permanent archive of every message or image.
-
-Persistent database state is limited to chat settings, game points and chat state. PostgreSQL is recommended in production.
-
-## Moderation
-
-Moderation is separate from personality. The included baseline detector handles basic duplicate spam, link-spam patterns and oversized messages. It does not give Groq moderation authority. Telegram enforcement remains subject to bot permissions.
-
-## Games
-
-The game engine uses virtual points only. There is no real-money gambling. Supported building blocks include emoji/guess/challenge-style events, participant joining and point awarding.
-
-## Image engine
-
-`Pillow` is used for local operations whenever possible:
-
-- side-by-side mashup
-- collage
-- meme captioning
-
-Groq is reserved for semantic captioning/vision or actual generation when needed.
-
-## Testing
-
-Run:
+Run before deployment:
 
 ```bash
 pytest -q
 python -m compileall app tests
 ```
 
-The test suite covers chaos scoring, selector behavior, cooldowns, dialect detection, structured decision validation, image pool/collage, game points and required deployment files.
+Do not treat a deployment as verified until these commands complete successfully in the target environment.
 
-## Troubleshooting
+## Render deployment
 
-### Groq disabled
-Check `GROQ_API_KEY`, provider availability and the configured model names. Kyoos will keep running without Groq; it will simply avoid AI-driven interventions or use local fallbacks.
+This repository is designed as a **Render Web Service**.
 
-### No proactive behavior
-Proactive messages are disabled by default to save free-plan quota. Normal user messages still go directly to Groq.
+1. Create/use a persistent PostgreSQL database.
+2. Connect the GitHub repository to a Render Web Service.
+3. Build command:
 
-### No group messages arrive
-Check Telegram Privacy Mode, bot membership and permissions. A bot cannot react to messages Telegram does not deliver to it.
+```bash
+pip install -r requirements.txt
+```
 
-### Database errors
-Check `DATABASE_URL` and credentials. Local SQLite is intentionally a simple free-mode fallback; its state is not guaranteed across Render redeploys/restarts. Use PostgreSQL later if permanent persistence is required.
+4. Start command should run the Flask application through Gunicorn, as defined by the current `render.yaml`.
+5. Add the secrets from `.env.example` in Render Environment Variables.
+6. Set `DATABASE_URL` to the Render PostgreSQL connection string.
+7. Set a strong `WEBHOOK_SECRET` or let Render generate one through the Blueprint.
+8. Deploy and verify `/health`.
 
-## Production limitations / paid or external services
+The service exposes `/health` for Render health checks and `/telegram/webhook` for Telegram updates.
 
-Kyoos itself is deployable as a Render Web Service, but some capabilities inherently depend on external services:
+## Security rules
 
-- Groq text/vision/image generation requires a working Groq API configuration and whatever quota/billing/availability applies to that account.
-- PostgreSQL persistence is recommended for production; use a persistent database service.
-- Redis is optional but recommended for multi-instance or stronger shared ephemeral state.
-- Telegram group moderation depends on the bot having the required Telegram admin permissions.
-- Companion bots require separately configured bot tokens and must comply with Telegram's platform limits/rules.
+- Never commit `.env`.
+- Never put Telegram/Groq keys in source code.
+- Never print API keys in logs or admin responses.
+- Keep `GROQ_ADMIN_IDS` explicitly configured.
+- Treat structured AI decisions as untrusted input.
+- Validate action names, target message IDs, payload length and enabled features before execution.
+- Keep Telegram API execution outside the AI provider itself.
 
-The core bot remains functional when Groq image generation is unavailable.
+## Project cleanup
 
-## Smart Social Behavior
-Kyoos uses a local social-signal layer before Groq: activity level, direct address, reply-to-bot, questions, humor/laughter cues, serious-context cues, repetition, continuity, old-message callback opportunities, and recent bot behavior. Weak messages can stop before an AI call, while directly addressed messages receive a higher response priority. Humanization remains probabilistic so replies do not all look identical.
+Generated Python bytecode/cache files are ignored by Git. Local SQLite files are ignored as well. For production persistence, use PostgreSQL rather than relying on Render's ephemeral filesystem.
 
-### Smart behavior environment variables
-- `AI_MIN_SCORE`: local score required before spending a Groq decision call (default `34`).
-- `CALLBACK_MIN_AGE_SECONDS`: minimum age for considering older messages as callback material (default `300`).
-- `PROACTIVE_QUIET_SECONDS`: minimum quiet period before proactive behavior is considered (default `600`).
+## Current improvement branch
 
-These can stay at their defaults on Render. Lowering `AI_MIN_SCORE` makes Kyoos more talkative and increases Groq usage; increasing it makes Kyoos quieter and cheaper.
-
-
-## Groq key management
-
-Private owner/admin command:
-
-`/123qrokz`
-
-The panel supports:
-- Add Groq key
-- Delete Groq key
-- Show current key
-- Show status of every key
-- Manually switch active key
-- Automatic rotation on rate-limit/auth/API failure
-
-Keys are stored by the application database, not printed in logs. For durable storage across Render service recreation, configure `DATABASE_URL` to a persistent external database.
+The `improve/almirfawya-100` branch contains the current hardening pass: safer configuration defaults, current Groq SDK range, thread-safe cooldown primitives, persistent proactive scheduling, a real `.env.example`, Git ignore rules and removal of committed Python cache files.

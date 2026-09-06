@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ai-bot
+    name: almirfawya-bot
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -10,12 +10,32 @@ services:
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_API_KEYS
+        sync: false
+      - key: GROQ_ADMIN_IDS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
       - key: WEBHOOK_SECRET
         generateValue: true
       - key: PORT
         value: "10000"
       - key: LOG_LEVEL
         value: INFO
+      - key: REPLY_CHANCE
+        value: "0.80"
+      - key: MIN_COOLDOWN_SECONDS
+        value: "20"
+      - key: MAX_COOLDOWN_SECONDS
+        value: "45"
+      - key: SOFT_HOURLY_LIMIT
+        value: "20"
+      - key: HARD_HOURLY_LIMIT
+        value: "30"
+      - key: MAX_CONSECUTIVE_BOT_MESSAGES
+        value: "2"
       - key: ENABLED_CHAOS
         value: "true"
       - key: ENABLED_MODERATION
@@ -24,6 +44,12 @@ services:
         value: "true"
       - key: ENABLED_PROACTIVE
         value: "true"
+      - key: PROACTIVE_CHANCE
+        value: "0.35"
+      - key: PROACTIVE_MIN_INTERVAL
+        value: "7200"
+      - key: PROACTIVE_MAX_INTERVAL
+        value: "18000"
       - key: AI_MIN_SCORE
         value: "34"
       - key: CALLBACK_MIN_AGE_SECONDS
