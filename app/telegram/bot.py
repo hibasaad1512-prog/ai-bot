@@ -13,6 +13,7 @@ from app.telegram.social_mix import install as install_social_mix
 from app.telegram.media_requests import install as install_media_requests
 from app.telegram.media_settings import register as register_media_settings
 from app.telegram.random_gate import install as install_random_gate
+from app.telegram.proactive_runtime import install as install_proactive_runtime
 from app.memory.handlers import MemoryHandlers
 from app.worker.scheduler import ProactiveScheduler
 from app.worker.media_automation import MediaAutomation
@@ -54,6 +55,7 @@ class KyoosBot:
         register_media_settings(self.bot,self.runtime)
         self.handlers=TelegramHandlers(self.bot,self.runtime)
         install_random_gate(self.handlers)
+        install_proactive_runtime(self.handlers)
         self.memory_handlers=MemoryHandlers(self.bot,self.runtime,self.handlers)
         install_social_mix(self.handlers)
         install_media_requests(self.handlers)
@@ -118,13 +120,34 @@ class KyoosBot:
         try:
             state=self.runtime.db.get_json('chat_settings','chat_id',0,{})
             cid=int(state.get('selected_chat_id',0) or 0); return cid if cid < 0 else None
-        except Exception: return None
+        except Exception:return None
+
+    def _known_chats(self):
+        try:
+            state=self.runtime.db.get_json('chat_settings','chat_id',0,{})
+            result=[]
+            for row in state.get('known_chats',[]):
+                try:
+                    cid=int(row.get('chat_id'))
+                    if cid < 0 and bool(row.get('bot_member',True)):
+                        result.append(cid)
+                except Exception: pass
+            selected=self._selected_chat()
+            if selected is not None and selected not in result:
+                result.append(selected)
+            return list(dict.fromkeys(result[-200:]))
+        except Exception:
+            selected=self._selected_chat()
+            return [selected] if selected is not None else []
 
     def _proactive_tick(self):
-        chat_id=self._selected_chat()
-        if chat_id is not None:
-            proactive=getattr(self.handlers,'proactive',None)
-            if callable(proactive): proactive(chat_id)
-            else: log.debug('proactive skipped: handler has no proactive method')
+        proactive=getattr(self.handlers,'proactive',None)
+        if not callable(proactive):
+            return
+        for chat_id in self._known_chats():
+            try:
+                proactive(chat_id)
+            except Exception:
+                log.exception('proactive chat tick failed chat=%s',chat_id)
 
     def process(self,update): self.bot.process_new_updates([update])
